@@ -4,14 +4,16 @@ import logging
 import os
 import re
 import subprocess
-from typing import Optional, Tuple, Union
+from typing import TYPE_CHECKING
 
 import ghp_import
 from packaging import version
 
 import mkdocs
-from mkdocs.config.defaults import MkDocsConfig
 from mkdocs.exceptions import Abort
+
+if TYPE_CHECKING:
+    from mkdocs.config.defaults import MkDocsConfig
 
 log = logging.getLogger(__name__)
 
@@ -45,9 +47,9 @@ def _get_current_sha(repo_path) -> str:
     return sha
 
 
-def _get_remote_url(remote_name: str) -> Union[Tuple[str, str], Tuple[None, None]]:
+def _get_remote_url(remote_name: str) -> tuple[str, str] | tuple[None, None]:
     # No CNAME found.  We will use the origin URL to determine the GitHub
-    # pages location.
+    # Pages location.
     remote = f"remote.{remote_name}.url"
     proc = subprocess.Popen(
         ["git", "config", "--get", remote],
@@ -97,7 +99,7 @@ def _check_version(branch: str) -> None:
 
 def gh_deploy(
     config: MkDocsConfig,
-    message: Optional[str] = None,
+    message: str | None = None,
     force=False,
     no_history=False,
     ignore_version=False,
@@ -140,9 +142,9 @@ def gh_deploy(
         raise Abort('Deployment Aborted!')
 
     cname_file = os.path.join(config.site_dir, 'CNAME')
-    # Does this repository have a CNAME set for GitHub pages?
+    # Does this repository have a CNAME set for GitHub Pages?
     if os.path.isfile(cname_file):
-        # This GitHub pages repository has a CNAME configured.
+        # This GitHub Pages repository has a CNAME configured.
         with open(cname_file) as f:
             cname_host = f.read().strip()
         log.info(

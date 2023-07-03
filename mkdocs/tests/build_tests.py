@@ -1,15 +1,30 @@
 #!/usr/bin/env python
+from __future__ import annotations
 
+import contextlib
+import io
+import os.path
+import re
+import textwrap
 import unittest
+from pathlib import Path
+from typing import TYPE_CHECKING
 from unittest import mock
 
+import markdown.preprocessors
+
 from mkdocs.commands import build
+from mkdocs.config import base
 from mkdocs.exceptions import PluginError
+from mkdocs.livereload import LiveReloadServer
 from mkdocs.structure.files import File, Files
 from mkdocs.structure.nav import get_navigation
 from mkdocs.structure.pages import Page
 from mkdocs.tests.base import PathAssertionMixin, load_config, tempdir
 from mkdocs.utils import meta
+
+if TYPE_CHECKING:
+    from mkdocs.config.defaults import MkDocsConfig
 
 
 def build_page(title, path, config, md_src=''):
@@ -20,6 +35,13 @@ def build_page(title, path, config, md_src=''):
     # Fake page.read_source()
     page.markdown, page.meta = meta.get_data(md_src)
     return page, files
+
+
+def testing_server(root, builder=lambda: None, mount_path="/"):
+    with mock.patch("socket.socket"):
+        return LiveReloadServer(
+            builder, host="localhost", port=123, root=root, mount_path=mount_path
+        )
 
 
 class BuildTests(PathAssertionMixin, unittest.TestCase):
@@ -371,11 +393,13 @@ class BuildTests(PathAssertionMixin, unittest.TestCase):
         mock_open.assert_called_once()
 
     @tempdir(files={'index.md': 'page content'})
-    @mock.patch(
-        'mkdocs.plugins.PluginCollection.run_event', side_effect=PluginError('Error message.')
-    )
-    def test_populate_page_read_plugin_error(self, docs_dir, mock_open):
+    def test_populate_page_read_plugin_error(self, docs_dir):
+        def on_page_markdown(*args, **kwargs):
+            raise PluginError('Error message.')
+
         cfg = load_config(docs_dir=docs_dir)
+        cfg.plugins.events['page_markdown'].append(on_page_markdown)
+
         file = File('index.md', cfg['docs_dir'], cfg['site_dir'], cfg['use_directory_urls'])
         page = Page('Foo', file, cfg)
         with self.assertLogs('mkdocs') as cm:
@@ -385,13 +409,12 @@ class BuildTests(PathAssertionMixin, unittest.TestCase):
             '\n'.join(cm.output),
             "ERROR:mkdocs.commands.build:Error reading page 'index.md':",
         )
-        mock_open.assert_called_once()
 
     # Test build._build_page
 
     @tempdir()
     def test_build_page(self, site_dir):
-        cfg = load_config(site_dir=site_dir, nav=['index.md'], plugins=[])
+        cfg = load_config(site_dir=site_dir, nav=['index.md'])
         fs = [File('index.md', cfg['docs_dir'], cfg['site_dir'], cfg['use_directory_urls'])]
         files = Files(fs)
         nav = get_navigation(files, cfg)
@@ -406,7 +429,7 @@ class BuildTests(PathAssertionMixin, unittest.TestCase):
     @tempdir()
     @mock.patch('jinja2.environment.Template.render', return_value='')
     def test_build_page_empty(self, site_dir, render_mock):
-        cfg = load_config(site_dir=site_dir, nav=['index.md'], plugins=[])
+        cfg = load_config(site_dir=site_dir, nav=['index.md'])
         fs = [File('index.md', cfg['docs_dir'], cfg['site_dir'], cfg['use_directory_urls'])]
         files = Files(fs)
         nav = get_navigation(files, cfg)
@@ -418,14 +441,14 @@ class BuildTests(PathAssertionMixin, unittest.TestCase):
             '\n'.join(cm.output),
             "INFO:mkdocs.commands.build:Page skipped: 'index.md'. Generated empty output.",
         )
-        self.assertPathNotFile(site_dir, 'index.html')
+        self.assertPathNotExists(site_dir, 'index.html')
         render_mock.assert_called_once()
 
     @tempdir(files={'index.md': 'page content'})
     @tempdir(files={'index.html': '<p>page content</p>'})
     @mock.patch('mkdocs.utils.write_file')
     def test_build_page_dirty_modified(self, site_dir, docs_dir, mock_write_file):
-        cfg = load_config(docs_dir=docs_dir, site_dir=site_dir, nav=['index.md'], plugins=[])
+        cfg = load_config(docs_dir=docs_dir, site_dir=site_dir, nav=['index.md'])
         fs = [File('index.md', cfg['docs_dir'], cfg['site_dir'], cfg['use_directory_urls'])]
         files = Files(fs)
         nav = get_navigation(files, cfg)
@@ -442,7 +465,7 @@ class BuildTests(PathAssertionMixin, unittest.TestCase):
     @tempdir(files={'testing.html': '<p>page content</p>'})
     @mock.patch('mkdocs.utils.write_file')
     def test_build_page_dirty_not_modified(self, site_dir, mock_write_file):
-        cfg = load_config(site_dir=site_dir, nav=['testing.md'], plugins=[])
+        cfg = load_config(site_dir=site_dir, nav=['testing.md'])
         fs = [File('testing.md', cfg['docs_dir'], cfg['site_dir'], cfg['use_directory_urls'])]
         files = Files(fs)
         nav = get_navigation(files, cfg)
@@ -458,7 +481,7 @@ class BuildTests(PathAssertionMixin, unittest.TestCase):
 
     @tempdir()
     def test_build_page_custom_template(self, site_dir):
-        cfg = load_config(site_dir=site_dir, nav=['index.md'], plugins=[])
+        cfg = load_config(site_dir=site_dir, nav=['index.md'])
         fs = [File('index.md', cfg['docs_dir'], cfg['site_dir'], cfg['use_directory_urls'])]
         files = Files(fs)
         nav = get_navigation(files, cfg)
@@ -474,7 +497,7 @@ class BuildTests(PathAssertionMixin, unittest.TestCase):
     @tempdir()
     @mock.patch('mkdocs.utils.write_file', side_effect=OSError('Error message.'))
     def test_build_page_error(self, site_dir, mock_write_file):
-        cfg = load_config(site_dir=site_dir, nav=['index.md'], plugins=[])
+        cfg = load_config(site_dir=site_dir, nav=['index.md'])
         fs = [File('index.md', cfg['docs_dir'], cfg['site_dir'], cfg['use_directory_urls'])]
         files = Files(fs)
         nav = get_navigation(files, cfg)
@@ -493,11 +516,12 @@ class BuildTests(PathAssertionMixin, unittest.TestCase):
         mock_write_file.assert_called_once()
 
     @tempdir()
-    @mock.patch(
-        'mkdocs.plugins.PluginCollection.run_event', side_effect=PluginError('Error message.')
-    )
-    def test_build_page_plugin_error(self, site_dir, mock_write_file):
-        cfg = load_config(site_dir=site_dir, nav=['index.md'], plugins=[])
+    def test_build_page_plugin_error(self, site_dir):
+        def on_page_context(*args, **kwargs):
+            raise PluginError('Error message.')
+
+        cfg = load_config(site_dir=site_dir, nav=['index.md'])
+        cfg.plugins.events['page_context'].append(on_page_context)
         fs = [File('index.md', cfg['docs_dir'], cfg['site_dir'], cfg['use_directory_urls'])]
         files = Files(fs)
         nav = get_navigation(files, cfg)
@@ -513,7 +537,6 @@ class BuildTests(PathAssertionMixin, unittest.TestCase):
             '\n'.join(cm.output),
             "ERROR:mkdocs.commands.build:Error building page 'index.md':",
         )
-        mock_write_file.assert_called_once()
 
     # Test build.build
 
@@ -560,6 +583,227 @@ class BuildTests(PathAssertionMixin, unittest.TestCase):
         self.assertPathNotExists(site_dir, 'main.html')
         self.assertPathNotExists(site_dir, 'locales')
 
+    @contextlib.contextmanager
+    def _assert_build_logs(self, expected):
+        with self.assertLogs('mkdocs') as cm:
+            yield
+        msgs = [f'{r.levelname}:{r.message}' for r in cm.records]
+        if msgs and msgs[0].startswith('INFO:Cleaning site directory'):
+            del msgs[0]
+        if msgs and msgs[0].startswith('INFO:Building documentation to directory'):
+            del msgs[0]
+        if msgs and msgs[-1].startswith('INFO:Documentation built'):
+            del msgs[-1]
+        self.assertEqual('\n'.join(msgs), textwrap.dedent(expected).strip('\n'))
+
+    @tempdir(
+        files={
+            'test/foo.md': 'page1 content, [bar](bar.md)',
+            'test/bar.md': 'page2 content, [baz](baz.md)',
+            'test/baz.md': 'page3 content, [foo](foo.md)',
+            '.zoo.md': 'page4 content',
+        }
+    )
+    @tempdir()
+    def test_exclude_pages_with_invalid_links(self, site_dir, docs_dir):
+        cfg = load_config(
+            docs_dir=docs_dir,
+            site_dir=site_dir,
+            use_directory_urls=False,
+            exclude_docs='ba*.md',
+        )
+
+        with self.subTest(live_server=None):
+            expected_logs = '''
+                INFO:Documentation file 'test/foo.md' contains a link to 'test/bar.md' which is excluded from the built site.
+            '''
+            with self._assert_build_logs(expected_logs):
+                build.build(cfg)
+            self.assertPathIsFile(site_dir, 'test', 'foo.html')
+            self.assertPathNotExists(site_dir, 'test', 'baz.html')
+            self.assertPathNotExists(site_dir, '.zoo.html')
+
+        server = testing_server(site_dir, mount_path='/documentation/')
+        with self.subTest(live_server=server):
+            expected_logs = '''
+                INFO:Documentation file 'test/bar.md' contains a link to 'test/baz.md' which is excluded from the built site.
+                INFO:Documentation file 'test/foo.md' contains a link to 'test/bar.md' which is excluded from the built site.
+                INFO:The following pages are being built only for the preview but will be excluded from `mkdocs build` per `exclude_docs`:
+                  - http://localhost:123/documentation/.zoo.html
+                  - http://localhost:123/documentation/test/bar.html
+                  - http://localhost:123/documentation/test/baz.html
+            '''
+            with self._assert_build_logs(expected_logs):
+                build.build(cfg, live_server=server)
+
+            foo_path = Path(site_dir, 'test', 'foo.html')
+            self.assertTrue(foo_path.is_file())
+            self.assertNotIn('DRAFT', foo_path.read_text())
+
+            baz_path = Path(site_dir, 'test', 'baz.html')
+            self.assertPathIsFile(baz_path)
+            self.assertIn('DRAFT', baz_path.read_text())
+
+            self.assertPathIsFile(site_dir, '.zoo.html')
+
+    @tempdir(
+        files={
+            'foo/README.md': 'page1 content',
+            'foo/index.md': 'page2 content',
+        }
+    )
+    @tempdir()
+    def test_conflicting_readme_and_index(self, site_dir, docs_dir):
+        cfg = load_config(docs_dir=docs_dir, site_dir=site_dir, use_directory_urls=False)
+
+        for server in None, testing_server(site_dir):
+            with self.subTest(live_server=server):
+                expected_logs = '''
+                    WARNING:Excluding 'foo/README.md' from the site because it conflicts with 'foo/index.md'.
+                '''
+                with self._assert_build_logs(expected_logs):
+                    build.build(cfg, live_server=server)
+
+                index_path = Path(site_dir, 'foo', 'index.html')
+                self.assertPathIsFile(index_path)
+                self.assertRegex(index_path.read_text(), r'page2 content')
+
+    @tempdir(
+        files={
+            'foo/README.md': 'page1 content',
+            'foo/index.md': 'page2 content',
+        }
+    )
+    @tempdir()
+    def test_exclude_readme_and_index(self, site_dir, docs_dir):
+        cfg = load_config(
+            docs_dir=docs_dir, site_dir=site_dir, use_directory_urls=False, exclude_docs='index.md'
+        )
+
+        for server in None, testing_server(site_dir):
+            with self.subTest(live_server=server):
+                with self._assert_build_logs(''):
+                    build.build(cfg, live_server=server)
+
+                index_path = Path(site_dir, 'foo', 'index.html')
+                self.assertPathIsFile(index_path)
+                self.assertRegex(index_path.read_text(), r'page1 content')
+
+    @tempdir(
+        files={
+            'foo.md': 'page1 content',
+            'bar.md': 'page2 content',
+        }
+    )
+    @tempdir()
+    @tempdir()
+    def test_plugins_adding_files_and_interacting(self, tmp_dir, site_dir, docs_dir):
+        def on_files_1(files: Files, config: MkDocsConfig) -> Files:
+            # Plugin 1 generates a file.
+            Path(tmp_dir, 'SUMMARY.md').write_text('foo.md\nbar.md\n')
+            files.append(File('SUMMARY.md', tmp_dir, config.site_dir, config.use_directory_urls))
+            return files
+
+        def on_files_2(files: Files, config: MkDocsConfig) -> None:
+            # Plugin 2 reads that file and uses it to configure the nav.
+            f = files.get_file_from_path('SUMMARY.md')
+            assert f is not None
+            config.nav = Path(f.abs_src_path).read_text().splitlines()
+
+        for server in None, testing_server(site_dir):
+            for exclude in 'full', 'nav', None:
+                with self.subTest(live_server=server, exclude=exclude):
+                    cfg = load_config(
+                        docs_dir=docs_dir,
+                        site_dir=site_dir,
+                        use_directory_urls=False,
+                        exclude_docs='SUMMARY.md' if exclude == 'full' else '',
+                        not_in_nav='SUMMARY.md' if exclude == 'nav' else '',
+                    )
+                    cfg.plugins.events['files'] += [on_files_1, on_files_2]
+
+                    expected_logs = ''
+                    if exclude is None:
+                        expected_logs = '''
+                            INFO:The following pages exist in the docs directory, but are not included in the "nav" configuration:
+                              - SUMMARY.md
+                        '''
+                    if exclude == 'full' and server:
+                        expected_logs = '''
+                            INFO:The following pages are being built only for the preview but will be excluded from `mkdocs build` per `exclude_docs`:
+                              - http://localhost:123/SUMMARY.html
+                        '''
+                    with self._assert_build_logs(expected_logs):
+                        build.build(cfg, live_server=server)
+
+                    foo_path = Path(site_dir, 'foo.html')
+                    self.assertPathIsFile(foo_path)
+                    self.assertRegex(
+                        foo_path.read_text(),
+                        r'href="foo.html"[\s\S]+href="bar.html"',  # Nav order is respected
+                    )
+
+                    summary_path = Path(site_dir, 'SUMMARY.html')
+                    if exclude == 'full' and not server:
+                        self.assertPathNotExists(summary_path)
+                    else:
+                        self.assertPathExists(summary_path)
+
+    @tempdir(
+        files={
+            'README.md': 'CONFIG_README\n',
+            'docs/foo.md': 'ROOT_FOO\n',
+            'docs/test/bar.md': 'TEST_BAR\n',
+            'docs/main/foo.md': 'MAIN_FOO\n',
+            'docs/main/main.md': (
+                '--8<-- "README.md"\n\n'
+                '--8<-- "foo.md"\n\n'
+                '--8<-- "test/bar.md"\n\n'
+                '--8<-- "../foo.md"\n\n'
+            ),
+        }
+    )
+    def test_markdown_extension_with_relative(self, config_dir):
+        for base_path, expected in {
+            '!relative': '''
+                <p>(Failed to read 'README.md')</p>
+                <p>MAIN_FOO</p>
+                <p>(Failed to read 'test/bar.md')</p>
+                <p>ROOT_FOO</p>''',
+            '!relative $docs_dir': '''
+                <p>(Failed to read 'README.md')</p>
+                <p>ROOT_FOO</p>
+                <p>TEST_BAR</p>
+                <p>(Failed to read '../foo.md')</p>''',
+            '!relative $config_dir/docs': '''
+                <p>(Failed to read 'README.md')</p>
+                <p>ROOT_FOO</p>
+                <p>TEST_BAR</p>
+                <p>(Failed to read '../foo.md')</p>''',
+            '!relative $config_dir': '''
+                <p>CONFIG_README</p>
+                <p>(Failed to read 'foo.md')</p>
+                <p>(Failed to read 'test/bar.md')</p>
+                <p>(Failed to read '../foo.md')</p>''',
+        }.items():
+            with self.subTest(base_path=base_path):
+                cfg = f'''
+                    site_name: test
+                    use_directory_urls: false
+                    markdown_extensions:
+                        - mkdocs.tests.build_tests:
+                            base_path: {base_path}
+                '''
+                config = base.load_config(
+                    io.StringIO(cfg), config_file_path=os.path.join(config_dir, 'mkdocs.yml')
+                )
+
+                with self._assert_build_logs(''):
+                    build.build(config)
+                main_path = Path(config_dir, 'site', 'main', 'main.html')
+                self.assertTrue(main_path.is_file())
+                self.assertIn(textwrap.dedent(expected), main_path.read_text())
+
     # Test build.site_directory_contains_stale_files
 
     @tempdir(files=['index.html'])
@@ -569,3 +813,29 @@ class BuildTests(PathAssertionMixin, unittest.TestCase):
     @tempdir()
     def test_not_site_dir_contains_stale_files(self, site_dir):
         self.assertFalse(build.site_directory_contains_stale_files(site_dir))
+
+
+class _TestPreprocessor(markdown.preprocessors.Preprocessor):
+    def __init__(self, base_path: str) -> None:
+        self.base_path = base_path
+
+    def run(self, lines: list[str]) -> list[str]:
+        for i, line in enumerate(lines):
+            m = re.search(r'^--8<-- "(.+)"$', line)
+            if m:
+                try:
+                    lines[i] = Path(self.base_path, m[1]).read_text()
+                except OSError:
+                    lines[i] = f"(Failed to read {m[1]!r})\n"
+        return lines
+
+
+class _TestExtension(markdown.extensions.Extension):
+    def __init__(self, base_path: str) -> None:
+        self.base_path = base_path
+
+    def extendMarkdown(self, md: markdown.Markdown) -> None:
+        md.preprocessors.register(_TestPreprocessor(self.base_path), "mkdocs_test", priority=32)
+
+
+makeExtension = _TestExtension

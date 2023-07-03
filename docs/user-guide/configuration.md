@@ -106,7 +106,7 @@ means that a page named 'foo/bar.md' will have its edit link lead to:
 `edit_uri` can actually be just an absolute URL, not necessarily relative to `repo_url`, so this can achieve the same result:
 
 ```yaml
-repo_url: https://example.com/project/repo/blob/main/docs/
+edit_uri: https://example.com/project/repo/blob/main/docs/
 ```
 
 For more flexibility, see [edit_uri_template](#edit_uri_template) below.
@@ -291,6 +291,69 @@ server root and effectively points to `https://example.com/bugs/`. Of course, th
 list of all the Markdown files found within the `docs_dir` and its
 sub-directories. Index files will always be listed first within a sub-section.
 
+### exclude_docs
+
+NEW: **New in version 1.5.**
+
+This config defines patterns of files (under [`docs_dir`](#docs_dir)) to not be picked up into the built site.
+
+Example:
+
+```yaml
+exclude_docs: |
+    api-config.json    # A file with this name anywhere.
+    drafts/            # A "drafts" directory anywhere.
+    /requirements.txt  # Top-level "docs/requirements.txt".
+    *.py               # Any file with this extension anywhere.
+    !/foo/example.py   # But keep this particular file.
+```
+
+This follows the [.gitignore pattern format](https://git-scm.com/docs/gitignore#_pattern_format).
+
+Note that `mkdocs serve` does *not* follow this setting and instead displays excluded documents but with a "DRAFT" mark. To prevent this effect, you can run `mkdocs serve --clean`.
+
+The following defaults are always implicitly prepended - to exclude dot-files (and directories) as well as the top-level `templates` directory:
+
+```yaml
+exclude_docs: |
+    .*
+    /templates/
+```
+
+So, in order to really start this config fresh, you'd need to specify a negated version of these entries first.
+
+Otherwise you could for example opt only certain dot-files back into the site:
+
+```yaml
+exclude_docs: |
+    !.assets  # Don't exclude '.assets' although all other '.*' are excluded
+```
+
+### not_in_nav
+
+NEW: **New in version 1.5.**
+
+NOTE: This option does *not* actually exclude anything from the nav.
+
+If you want to include some docs into the site but intentionally exclude them from the nav, normally MkDocs warns about this.
+
+Adding such patterns of files (relative to [`docs_dir`](#docs_dir)) into the `not_in_nav` config will prevent such warnings.
+
+Example:
+
+```yaml
+nav:
+    - Foo: foo.md
+    - Bar: bar.md
+
+not_in_nav: |
+    /private.md
+```
+
+As the previous option, this follows the .gitignore pattern format.
+
+NOTE: Adding a given file to [`exclude_docs`](#exclude_docs) takes precedence over and implies `not_in_nav`.
+
 ## Build directories
 
 ### theme
@@ -386,24 +449,53 @@ the root of your local file system.
 
 ### extra_css
 
-Set a list of CSS files in your `docs_dir` to be included by the theme. For
-example, the following example will include the extra.css file within the
-css subdirectory in your [docs_dir](#docs_dir).
+Set a list of CSS files (relative to `docs_dir`) to be included by the theme, typically as `<link>` tags.
+
+Example:
 
 ```yaml
 extra_css:
-    - css/extra.css
-    - css/second_extra.css
+  - css/extra.css
+  - css/second_extra.css
 ```
 
 **default**: `[]` (an empty list).
 
 ### extra_javascript
 
-Set a list of JavaScript files in your `docs_dir` to be included by the theme.
-See the example in [extra_css] for usage.
+Set a list of JavaScript files in your `docs_dir` to be included by the theme, as `<script>` tags.
+
+> NEW: **Changed in version 1.5:**
+>
+> Older versions of MkDocs supported only a plain list of strings, but now several additional config keys are available: `type`, `async`, `defer`.
+
+See the examples and what they produce:
+
+```yaml
+extra_javascript:
+  - some_plain_javascript.js       # <script src="some_plain_javascript.js"></script>
+        # New behavior in MkDocs 1.5:
+  - implicitly_as_module.mjs       # <script src="implicitly_as_module.mjs" type="module"></script>
+        # Config keys only supported since MkDocs 1.5:
+  - path: explicitly_as_module.mjs # <script src="explicitly_as_module.mjs" type="module"></script>
+    type: module
+  - path: deferred_plain.js        # <script src="deferred_plain.js" defer></script>
+    defer: true
+  - path: scripts/async_module.mjs # <script src="scripts/async_module.mjs" type="module" async></script>
+    type: module
+    async: true
+```
+
+So, each item can be either:
+
+* a plain string, or
+* a mapping that has the required `path` key and 3 optional keys `type` (string), `async` (boolean), `defer` (boolean).
+
+Only the plain string variant detects the `.mjs` extension and adds `type="module"`, otherwise `type: module` must be written out regardless of extension.
 
 **default**: `[]` (an empty list).
+
+NOTE: `*.js` and `*.css` files, just like any other type of file, are always copied from `docs_dir` into the site's deployed copy, regardless if they're linked to the pages via the above configs or not.
 
 ### extra_templates
 
@@ -526,7 +618,7 @@ For example, to enable permalinks in the (included) `toc` extension, use:
 ```yaml
 markdown_extensions:
     - toc:
-        permalink: True
+        permalink: true
 ```
 
 Note that a colon (`:`) must follow the extension name (`toc`) and then on a new
@@ -537,7 +629,7 @@ defined on a separate line:
 ```yaml
 markdown_extensions:
     - toc:
-        permalink: True
+        permalink: true
         separator: "_"
 ```
 
@@ -549,9 +641,13 @@ for that extension:
 markdown_extensions:
     - smarty
     - toc:
-        permalink: True
+        permalink: true
     - sane_lists
 ```
+
+> NOTE: **Dynamic config values.**
+>
+> To dynamically configure the extensions, you can get the config values from [environment variables](#environment-variables) or [obtain paths](#paths-relative-to-the-current-file-or-site) of the currently rendered Markdown file or the overall MkDocs site.
 
 In the above examples, each extension is a list item (starts with a `-`). As an
 alternative, key/value pairs can be used instead. However, in that case an empty
@@ -562,20 +658,20 @@ Therefore, the last example above could also be defined as follows:
 markdown_extensions:
     smarty: {}
     toc:
-        permalink: True
+        permalink: true
     sane_lists: {}
 ```
 
 This alternative syntax is required if you intend to override some options via
 [inheritance].
 
-> NOTE: **See Also:**
+> NOTE: **More extensions.**
 >
 > The Python-Markdown documentation provides a [list of extensions][exts]
 > which are available out-of-the-box. For a list of configuration options
 > available for a given extension, see the documentation for that extension.
 >
-> You may also install and use various [third party extensions][3rd]. Consult
+> You may also install and use various third party extensions ([Python-Markdown wiki], [MkDocs project catalog][catalog]). Consult
 > the documentation provided by those extensions for installation instructions
 > and available configuration options.
 
@@ -804,7 +900,9 @@ plugins:
 
 **default**: `full`
 
-## Environment Variables
+## Special YAML tags
+
+### Environment variables
 
 In most cases, the value of a configuration option is set directly in the
 configuration file. However, as an option, the value of a configuration option
@@ -840,6 +938,41 @@ cannot be defined within a single environment variable.
 
 For more details, see the [pyyaml_env_tag](https://github.com/waylan/pyyaml-env-tag)
 project.
+
+### Paths relative to the current file or site
+
+NEW: **New in version 1.5.**
+
+Some Markdown extensions can benefit from knowing the path of the Markdown file that's currently being processed, or just the root path of the current site. For that, the special tag `!relative` can be used in most contexts within the config file, though the only known usecases are within [`markdown_extensions`](#markdown_extensions).
+
+Examples of the possible values are:
+
+```yaml
+- !relative  # Relative to the directory of the current Markdown file
+- !relative $docs_dir  # Path of the docs_dir
+- !relative $config_dir  # Path of the directory that contains the main mkdocs.yml
+- !relative $config_dir/some/child/dir  # Some subdirectory of the root config directory
+```
+
+(Here, `$docs_dir` and `$config_dir` are currently the *only* special prefixes that are recognized.)
+
+Example:
+
+```yaml
+markdown_extensions:
+  - pymdownx.snippets:
+      base_path: !relative  # Relative to the current Markdown file
+```
+
+This allows the [pymdownx.snippets] extension to include files relative to the current Markdown file, which without this tag it would have no way of knowing.
+
+> NOTE: Even for the default case, any extension's base path is technically the *current working directory* although the assumption is that it's the *directory of mkdocs.yml*. So even if you don't want the paths to be relative, to improve the default behavior, always prefer to use this idiom:
+>
+> ```yaml
+> markdown_extensions:
+>   - pymdownx.snippets:
+>       base_path: !relative $config_dir  # Relative to the root directory with mkdocs.yml
+> ```
 
 ## Configuration Inheritance
 
@@ -958,12 +1091,19 @@ Therefore, defining paths in a parent file which is inherited by multiple
 different sites may not work as expected. It is generally best to define
 path based options in the primary configuration file only.
 
+The inheritance can also be used as a quick way to override keys on the command line - by using stdin as the config file. For example:
+
+```bash
+echo '{INHERIT: mkdocs.yml, site_name: "Renamed site"}' | mkdocs build -f -
+```
+
 [Theme Developer Guide]: ../dev-guide/themes.md
 [pymdk-extensions]: https://python-markdown.github.io/extensions/
 [pymkd]: https://python-markdown.github.io/
 [smarty]: https://python-markdown.github.io/extensions/smarty/
 [exts]: https://python-markdown.github.io/extensions/
-[3rd]: https://github.com/Python-Markdown/markdown/wiki/Third-Party-Extensions
+[Python-Markdown wiki]: https://github.com/Python-Markdown/markdown/wiki/Third-Party-Extensions
+[catalog]: https://github.com/mkdocs/catalog
 [configuring pages and navigation]: writing-your-docs.md#configure-pages-and-navigation
 [theme_dir]: customizing-your-theme.md#using-the-theme_dir
 [choosing your theme]: choosing-your-theme.md
@@ -978,3 +1118,4 @@ path based options in the primary configuration file only.
 [markdown_extensions]: #markdown_extensions
 [nav]: #nav
 [inheritance]: #configuration-inheritance
+[pymdownx.snippets]: https://facelessuser.github.io/pymdown-extensions/extensions/snippets/

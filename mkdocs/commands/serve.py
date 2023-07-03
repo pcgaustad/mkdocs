@@ -5,16 +5,18 @@ import logging
 import shutil
 import tempfile
 from os.path import isdir, isfile, join
-from typing import Optional
+from typing import TYPE_CHECKING
 from urllib.parse import urlsplit
 
 import jinja2.exceptions
 
 from mkdocs.commands.build import build
 from mkdocs.config import load_config
-from mkdocs.config.defaults import MkDocsConfig
 from mkdocs.exceptions import Abort
 from mkdocs.livereload import LiveReloadServer
+
+if TYPE_CHECKING:
+    from mkdocs.config.defaults import MkDocsConfig
 
 log = logging.getLogger(__name__)
 
@@ -26,6 +28,7 @@ def serve(
     theme=None,
     theme_dir=None,
     livereload='livereload',
+    build_type=None,
     watch_theme=False,
     watch=[],
     **kwargs,
@@ -56,58 +59,56 @@ def serve(
         **kwargs,
     )
 
-    live_server = livereload in ('dirty', 'livereload')
-    dirty = livereload == 'dirty'
+    is_clean = build_type == 'clean'
+    is_dirty = build_type == 'dirty'
 
-    def builder(config: Optional[MkDocsConfig] = None):
+    config = get_config()
+    config.plugins.on_startup(command=('build' if is_clean else 'serve'), dirty=is_dirty)
+
+    def builder(config: MkDocsConfig | None = None):
         log.info("Building documentation...")
         if config is None:
             config = get_config()
 
         # combine CLI watch arguments with config file values
-        if config.watch is None:
-            config.watch = watch
-        else:
-            config.watch.extend(watch)
+        config.watch.extend(watch)
 
         # Override a few config settings after validation
         config.site_url = f'http://{config.dev_addr}{mount_path(config)}'
 
-        build(config, live_server=live_server, dirty=dirty)
+        build(config, live_server=None if is_clean else server, dirty=is_dirty)
 
-    config = get_config()
-    config['plugins'].run_event('startup', command='serve', dirty=dirty)
+    host, port = config.dev_addr
+    server = LiveReloadServer(
+        builder=builder, host=host, port=port, root=site_dir, mount_path=mount_path(config)
+    )
+
+    def error_handler(code) -> bytes | None:
+        if code in (404, 500):
+            error_page = join(site_dir, f'{code}.html')
+            if isfile(error_page):
+                with open(error_page, 'rb') as f:
+                    return f.read()
+        return None
+
+    server.error_handler = error_handler
 
     try:
         # Perform the initial build
         builder(config)
 
-        host, port = config.dev_addr
-        server = LiveReloadServer(
-            builder=builder, host=host, port=port, root=site_dir, mount_path=mount_path(config)
-        )
-
-        def error_handler(code) -> Optional[bytes]:
-            if code in (404, 500):
-                error_page = join(site_dir, f'{code}.html')
-                if isfile(error_page):
-                    with open(error_page, 'rb') as f:
-                        return f.read()
-            return None
-
-        server.error_handler = error_handler
-
-        if live_server:
+        if livereload:
             # Watch the documentation files, the config file and the theme files.
             server.watch(config.docs_dir)
-            server.watch(config.config_file_path)
+            if config.config_file_path:
+                server.watch(config.config_file_path)
 
             if watch_theme:
                 for d in config.theme.dirs:
                     server.watch(d)
 
             # Run `serve` plugin events.
-            server = config.plugins.run_event('serve', server, config=config, builder=builder)
+            server = config.plugins.on_serve(server, config=config, builder=builder)
 
             for item in config.watch:
                 server.watch(item)
@@ -125,6 +126,6 @@ def serve(
         # Avoid ugly, unhelpful traceback
         raise Abort(f'{type(e).__name__}: {e}')
     finally:
-        config['plugins'].run_event('shutdown')
+        config.plugins.on_shutdown()
         if isdir(site_dir):
             shutil.rmtree(site_dir)

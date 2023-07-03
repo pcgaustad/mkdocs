@@ -63,6 +63,12 @@ It will attempt to run the tests against all of the Python versions we
 support. So don't be concerned if you are missing some. The rest
 will be verified by [GitHub Actions] when you submit a pull request.
 
+## Formatting the code
+
+Python code within MkDocs' code base is formatted using [Black] and [Isort].
+You can automatically format the code according to these tools
+with `hatch run style:format`.
+
 ## Translating themes
 
 To localize a theme to your favorite language, follow the guide on [Translating
@@ -86,11 +92,12 @@ with `{% trans %}` and `{% endtrans %}` tags.
 
 Each time a translatable text placeholder is added, removed or changed in a
 theme template, the theme's Portable Object Template (`pot`) file needs to be
-updated by running the `extract_messages` command. For example, to update the
-`pot` file of the `mkdocs` theme, run the following command:
+updated by running the `extract_messages` command. To update the
+`pot` file for both built-in themes, run these commands:
 
 ```bash
 pybabel extract --project=MkDocs --copyright-holder=MkDocs --msgid-bugs-address='https://github.com/mkdocs/mkdocs/issues' --no-wrap --version="$(hatch version)" --mapping-file mkdocs/themes/babel.cfg --output-file mkdocs/themes/mkdocs/messages.pot mkdocs/themes/mkdocs
+pybabel extract --project=MkDocs --copyright-holder=MkDocs --msgid-bugs-address='https://github.com/mkdocs/mkdocs/issues' --no-wrap --version="$(hatch version)" --mapping-file mkdocs/themes/babel.cfg --output-file mkdocs/themes/readthedocs/messages.pot mkdocs/themes/readthedocs
 ```
 
 The updated `pot` file should be included in a PR with the updated template.
@@ -110,3 +117,5 @@ file so that everything is ready for translators to do their job.
 [PyPA Code of Conduct]: https://www.pypa.io/en/latest/code-of-conduct/
 [Translating Themes]: ../dev-guide/translations.md
 [Jinja's i18n extension]: https://jinja.palletsprojects.com/en/latest/extensions/#i18n-extension
+[Black]: https://pypi.org/project/black/
+[Isort]: https://pypi.org/project/isort/

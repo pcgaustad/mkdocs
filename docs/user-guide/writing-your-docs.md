@@ -27,10 +27,7 @@ extensions may be used for your Markdown source files: `markdown`, `mdown`,
 directory will be rendered in the built site regardless of any settings.
 
 NOTE:
-Files and directories with names which begin with a dot (for example:
-`.foo.md` or `.bar/baz.md`) are ignored by MkDocs, which matches the
-behavior of most web servers. There is no option to override this
-behavior.
+Files and directories with names which begin with a dot (for example: `.foo.md` or `.bar/baz.md`) are ignored by MkDocs. This can be overridden with the [`exclude_docs` config](configuration.md#exclude_docs).
 
 You can also create multi-page documentation, by creating several Markdown
 files:
@@ -309,7 +306,7 @@ As well as the Markdown source files, you can also include other file types in
 your documentation, which will be copied across when generating your
 documentation site. These might include images and other media.
 
-For example, if your project documentation needed to include a [GitHub pages
+For example, if your project documentation needed to include a [GitHub Pages
 CNAME file] and a PNG formatted screenshot image then your file layout might
 look as follows:
 
@@ -338,7 +335,7 @@ Cupcake indexer is a snazzy new project for indexing small cakes.
 Your image will now be embedded when you build the documentation, and should
 also be previewed if you're working on the documentation with a Markdown editor.
 
-[GitHub pages CNAME file]: https://help.github.com/articles/using-a-custom-domain-with-github-pages/
+[GitHub Pages CNAME file]: https://help.github.com/articles/using-a-custom-domain-with-github-pages/
 
 #### Linking from raw HTML
 
@@ -380,10 +377,14 @@ specific page. The following keys are supported:
     MkDocs will attempt to determine the title of a document in the following
     ways, in order:
 
-    1. A title defined in the [nav] configuration setting for a document.
-    2. A title defined in the `title` meta-data key of a document.
-    3. A level 1 Markdown header on the first line of the document body. Please note that [Setext-style] headers are not supported.
-    4. The filename of a document.
+    1.  A title defined in the [nav] configuration setting for a document.
+
+    2.  A title defined in the `title` meta-data key of a document.
+
+    3.  A level 1 Markdown header on the first line of the document body.  
+        ([Setext-style] headers are supported *only since MkDocs 1.5*.)
+
+    4.  The filename of a document.
 
     Upon finding a title for a page, MkDoc does not continue checking any
     additional sources in the above list.
@@ -459,8 +460,8 @@ detected, but the content between the delimiters is not valid YAML
 meta-data, MkDocs does not attempt to parse the content as MultiMarkdown
 style meta-data.
 
-[YAML]: http://yaml.org
-[MultiMarkdown]: http://fletcherpenney.net/MultiMarkdown_Syntax_Guide#metadata
+[YAML]: https://yaml.org
+[MultiMarkdown]: https://fletcherpenney.net/MultiMarkdown_Syntax_Guide#metadata
 [nav]: configuration.md#nav
 
 ### Tables

@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import contextlib
 import os
 import textwrap
@@ -21,18 +23,17 @@ def get_markdown_toc(markdown_source):
     return md.toc_tokens
 
 
-def load_config(**cfg) -> MkDocsConfig:
+def load_config(config_file_path: str | None = None, **cfg) -> MkDocsConfig:
     """Helper to build a simple config for testing."""
     path_base = os.path.join(os.path.abspath(os.path.dirname(__file__)), 'integration', 'minimal')
-    cfg = cfg or {}
     if 'site_name' not in cfg:
         cfg['site_name'] = 'Example'
-    if 'config_file_path' not in cfg:
-        cfg['config_file_path'] = os.path.join(path_base, 'mkdocs.yml')
     if 'docs_dir' not in cfg:
         # Point to an actual dir to avoid a 'does not exist' error on validation.
         cfg['docs_dir'] = os.path.join(path_base, 'docs')
-    conf = MkDocsConfig(config_file_path=cfg['config_file_path'])
+    if 'plugins' not in cfg:
+        cfg['plugins'] = []
+    conf = MkDocsConfig(config_file_path=config_file_path or os.path.join(path_base, 'mkdocs.yml'))
     conf.load_dict(cfg)
 
     errors_warnings = conf.validate()
@@ -121,20 +122,8 @@ class PathAssertionMixin:
             msg = self._formatMessage(None, f"The path '{path}' is not a file that exists")
             raise self.failureException(msg)
 
-    def assertPathNotFile(self, *parts):
-        path = os.path.join(*parts)
-        if os.path.isfile(path):
-            msg = self._formatMessage(None, f"The path '{path}' is a file that exists")
-            raise self.failureException(msg)
-
     def assertPathIsDir(self, *parts):
         path = os.path.join(*parts)
         if not os.path.isdir(path):
             msg = self._formatMessage(None, f"The path '{path}' is not a directory that exists")
-            raise self.failureException(msg)
-
-    def assertPathNotDir(self, *parts):
-        path = os.path.join(*parts)
-        if os.path.isfile(path):
-            msg = self._formatMessage(None, f"The path '{path}' is a directory that exists")
             raise self.failureException(msg)

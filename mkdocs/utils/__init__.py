@@ -17,20 +17,7 @@ import warnings
 from collections import defaultdict
 from datetime import datetime, timezone
 from pathlib import PurePath
-from typing import (
-    IO,
-    TYPE_CHECKING,
-    Any,
-    Collection,
-    Dict,
-    Iterable,
-    List,
-    MutableSequence,
-    Optional,
-    Tuple,
-    Type,
-    TypeVar,
-)
+from typing import TYPE_CHECKING, Collection, Iterable, MutableSequence, TypeVar
 from urllib.parse import urlsplit
 
 if sys.version_info >= (3, 10):
@@ -38,11 +25,8 @@ if sys.version_info >= (3, 10):
 else:
     from importlib_metadata import EntryPoint, entry_points
 
-import yaml
-from mergedeep import merge
-from yaml_env_tag import construct_env_tag
-
 from mkdocs import exceptions
+from mkdocs.utils.yaml import get_yaml_loader, yaml_load  # noqa - legacy re-export
 
 if TYPE_CHECKING:
     from mkdocs.structure.pages import Page
@@ -58,40 +42,6 @@ markdown_extensions = (
     '.mkd',
     '.md',
 )
-
-
-def get_yaml_loader(loader=yaml.Loader):
-    """Wrap PyYaml's loader so we can extend it to suit our needs."""
-
-    class Loader(loader):
-        """
-        Define a custom loader derived from the global loader to leave the
-        global loader unaltered.
-        """
-
-    # Attach Environment Variable constructor.
-    # See https://github.com/waylan/pyyaml-env-tag
-    Loader.add_constructor('!ENV', construct_env_tag)
-
-    return Loader
-
-
-def yaml_load(source: IO, loader: Optional[Type[yaml.Loader]] = None) -> Optional[Dict[str, Any]]:
-    """Return dict of source YAML file using loader, recursively deep merging inherited parent."""
-    Loader = loader or get_yaml_loader()
-    result = yaml.load(source, Loader=Loader)
-    if result is not None and 'INHERIT' in result:
-        relpath = result.pop('INHERIT')
-        abspath = os.path.normpath(os.path.join(os.path.dirname(source.name), relpath))
-        if not os.path.exists(abspath):
-            raise exceptions.ConfigurationError(
-                f"Inherited config file '{relpath}' does not exist at '{abspath}'."
-            )
-        log.debug(f"Loading inherited configuration file: {abspath}")
-        with open(abspath, 'rb') as fd:
-            parent = yaml_load(fd, Loader)
-        result = merge(parent, result)
-    return result
 
 
 def modified_time(file_path):
@@ -142,7 +92,7 @@ def get_build_date() -> str:
     return get_build_datetime().strftime('%Y-%m-%d')
 
 
-def reduce_list(data_set: Iterable[str]) -> List[str]:
+def reduce_list(data_set: Iterable[T]) -> list[T]:
     """Reduce duplicate items in a list and preserve order"""
     return list(dict.fromkeys(data_set))
 
@@ -257,7 +207,7 @@ def is_error_template(path: str) -> bool:
 
 
 @functools.lru_cache(maxsize=None)
-def _norm_parts(path: str) -> List[str]:
+def _norm_parts(path: str) -> list[str]:
     if not path.startswith('/'):
         path = '/' + path
     path = posixpath.normpath(path)[1:]
@@ -292,18 +242,22 @@ def get_relative_url(url: str, other: str) -> str:
     return relurl + '/' if url.endswith('/') else relurl
 
 
-def normalize_url(path: str, page: Optional[Page] = None, base: str = '') -> str:
+def normalize_url(path: str, page: Page | None = None, base: str = '') -> str:
     """Return a URL relative to the given page or using the base."""
-    path, is_abs = _get_norm_url(path)
-    if is_abs:
+    path, relative_level = _get_norm_url(path)
+    if relative_level == -1:
         return path
     if page is not None:
-        return get_relative_url(path, page.url)
+        result = get_relative_url(path, page.url)
+        if relative_level > 0:
+            result = '../' * relative_level + result
+        return result
+
     return posixpath.join(base, path)
 
 
 @functools.lru_cache(maxsize=None)
-def _get_norm_url(path: str) -> Tuple[str, bool]:
+def _get_norm_url(path: str) -> tuple[str, int]:
     if not path:
         path = '.'
     elif '\\' in path:
@@ -315,16 +269,20 @@ def _get_norm_url(path: str) -> Tuple[str, bool]:
     # Allow links to be fully qualified URLs
     parsed = urlsplit(path)
     if parsed.scheme or parsed.netloc or path.startswith(('/', '#')):
-        return path, True
-    return path, False
+        return path, -1
+
+    # Relative path - preserve information about it
+    norm = posixpath.normpath(path) + '/'
+    relative_level = 0
+    while norm.startswith('../', relative_level * 3):
+        relative_level += 1
+    return path, relative_level
 
 
 def create_media_urls(
-    path_list: List[str], page: Optional[Page] = None, base: str = ''
-) -> List[str]:
-    """
-    Return a list of URLs relative to the given page or using the base.
-    """
+    path_list: Iterable[str], page: Page | None = None, base: str = ''
+) -> list[str]:
+    """Soft-deprecated, do not use."""
     return [normalize_url(path, page, base) for path in path_list]
 
 
@@ -340,11 +298,11 @@ def get_theme_dir(name: str) -> str:
     return os.path.dirname(os.path.abspath(theme.load().__file__))
 
 
-def get_themes() -> Dict[str, EntryPoint]:
+def get_themes() -> dict[str, EntryPoint]:
     """Return a dict of all installed themes as {name: EntryPoint}."""
 
-    themes: Dict[str, EntryPoint] = {}
-    eps: Dict[EntryPoint, None] = dict.fromkeys(entry_points(group='mkdocs.themes'))
+    themes: dict[str, EntryPoint] = {}
+    eps: dict[EntryPoint, None] = dict.fromkeys(entry_points(group='mkdocs.themes'))
     builtins = {ep.name for ep in eps if ep.dist is not None and ep.dist.name == 'mkdocs'}
 
     for theme in eps:
@@ -385,14 +343,8 @@ def dirname_to_title(dirname: str) -> str:
     return title
 
 
-def get_markdown_title(markdown_src: str) -> Optional[str]:
-    """
-    Get the title of a Markdown document. The title in this case is considered
-    to be a H1 that occurs before any other content in the document.
-    The procedure is then to iterate through the lines, stopping at the first
-    non-whitespace content. If it is a title, return that, otherwise return
-    None.
-    """
+def get_markdown_title(markdown_src: str) -> str | None:
+    """Soft-deprecated, do not use."""
     lines = markdown_src.replace('\r\n', '\n').replace('\r', '\n').split('\n')
     while lines:
         line = lines.pop(0).strip()
@@ -443,11 +395,23 @@ def nest_paths(paths):
     return nested
 
 
+class DuplicateFilter:
+    """Avoid logging duplicate messages."""
+
+    def __init__(self) -> None:
+        self.msgs: set[str] = set()
+
+    def __call__(self, record: logging.LogRecord) -> bool:
+        rv = record.msg not in self.msgs
+        self.msgs.add(record.msg)
+        return rv
+
+
 class CountHandler(logging.NullHandler):
     """Counts all logged messages >= level."""
 
     def __init__(self, **kwargs) -> None:
-        self.counts: Dict[int, int] = defaultdict(int)
+        self.counts: dict[int, int] = defaultdict(int)
         super().__init__(**kwargs)
 
     def handle(self, record):
@@ -457,11 +421,30 @@ class CountHandler(logging.NullHandler):
             self.counts[record.levelno] += 1
         return rv
 
-    def get_counts(self) -> List[Tuple[str, int]]:
+    def get_counts(self) -> list[tuple[str, int]]:
         return [(logging.getLevelName(k), v) for k, v in sorted(self.counts.items(), reverse=True)]
 
 
-# For backward compatibility as some plugins import it.
-# It is no longer necessary as all messages on the
-# `mkdocs` logger get counted automatically.
-warning_filter = logging.Filter()
+class weak_property:
+    """Same as a read-only property, but allows overwriting the field for good."""
+
+    def __init__(self, func):
+        self.func = func
+        self.__doc__ = func.__doc__
+
+    def __get__(self, instance, owner=None):
+        if instance is None:
+            return self
+        return self.func(instance)
+
+
+def __getattr__(name: str):
+    if name == 'warning_filter':
+        warnings.warn(
+            "warning_filter doesn't do anything since MkDocs 1.2 and will be removed soon. "
+            "All messages on the `mkdocs` logger get counted automatically.",
+            DeprecationWarning,
+        )
+        return logging.Filter()
+
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

@@ -4,25 +4,25 @@ import functools
 import logging
 import os
 import sys
+import warnings
 from collections import UserDict
 from contextlib import contextmanager
 from typing import (
     IO,
     TYPE_CHECKING,
+    Any,
     Generic,
     Iterator,
     List,
-    Optional,
+    Mapping,
     Sequence,
     Tuple,
     TypeVar,
-    Union,
     overload,
 )
 
-from yaml import YAMLError
-
 from mkdocs import exceptions, utils
+from mkdocs.utils import weak_property
 
 if TYPE_CHECKING:
     from mkdocs.config.defaults import MkDocsConfig
@@ -35,8 +35,8 @@ T = TypeVar('T')
 
 
 class BaseConfigOption(Generic[T]):
-    def __init__(self):
-        self.warnings: List[str] = []
+    def __init__(self) -> None:
+        self.warnings: list[str] = []
         self.default = None
 
     @property
@@ -81,6 +81,8 @@ class BaseConfigOption(Generic[T]):
         """
 
     def __set_name__(self, owner, name):
+        if name.endswith('_') and not name.startswith('_'):
+            name = name[:-1]
         self._name = name
 
     @overload
@@ -129,13 +131,13 @@ class Config(UserDict):
     """
 
     _schema: PlainConfigSchema
-    config_file_path: Optional[str]
+    config_file_path: str
 
     def __init_subclass__(cls):
         schema = dict(getattr(cls, '_schema', ()))
         for attr_name, attr in cls.__dict__.items():
             if isinstance(attr, BaseConfigOption):
-                schema[attr_name] = attr
+                schema[getattr(attr, '_name', attr_name)] = attr
         cls._schema = tuple(schema.items())
 
         for attr_name, attr in cls._schema:
@@ -153,9 +155,9 @@ class Config(UserDict):
             return LegacyConfig(*args, **kwargs)
         return super().__new__(cls)
 
-    def __init__(self, config_file_path: Optional[Union[str, bytes]] = None):
+    def __init__(self, config_file_path: str | bytes | None = None):
         super().__init__()
-        self.user_configs: List[dict] = []
+        self.__user_configs: list[dict] = []
         self.set_defaults()
 
         self._schema_keys = {k for k, v in self._schema}
@@ -166,7 +168,7 @@ class Config(UserDict):
                 config_file_path = config_file_path.decode(encoding=sys.getfilesystemencoding())
             except UnicodeDecodeError:
                 raise ValidationError("config_file_path is not a Unicode string.")
-        self.config_file_path = config_file_path
+        self.config_file_path = config_file_path or ''
 
     def set_defaults(self) -> None:
         """
@@ -176,7 +178,7 @@ class Config(UserDict):
         for key, config_option in self._schema:
             self[key] = config_option.default
 
-    def _validate(self) -> Tuple[ConfigErrors, ConfigWarnings]:
+    def _validate(self) -> tuple[ConfigErrors, ConfigWarnings]:
         failed: ConfigErrors = []
         warnings: ConfigWarnings = []
 
@@ -194,7 +196,7 @@ class Config(UserDict):
 
         return failed, warnings
 
-    def _pre_validate(self) -> Tuple[ConfigErrors, ConfigWarnings]:
+    def _pre_validate(self) -> tuple[ConfigErrors, ConfigWarnings]:
         failed: ConfigErrors = []
         warnings: ConfigWarnings = []
 
@@ -208,7 +210,7 @@ class Config(UserDict):
 
         return failed, warnings
 
-    def _post_validate(self) -> Tuple[ConfigErrors, ConfigWarnings]:
+    def _post_validate(self) -> tuple[ConfigErrors, ConfigWarnings]:
         failed: ConfigErrors = []
         warnings: ConfigWarnings = []
 
@@ -222,7 +224,7 @@ class Config(UserDict):
 
         return failed, warnings
 
-    def validate(self) -> Tuple[ConfigErrors, ConfigWarnings]:
+    def validate(self) -> tuple[ConfigErrors, ConfigWarnings]:
         failed, warnings = self._pre_validate()
 
         run_failed, run_warnings = self._validate()
@@ -239,28 +241,33 @@ class Config(UserDict):
 
         return failed, warnings
 
-    def load_dict(self, patch: Optional[dict]) -> None:
+    def load_dict(self, patch: dict) -> None:
         """Load config options from a dictionary."""
 
         if not isinstance(patch, dict):
             raise exceptions.ConfigurationError(
-                "The configuration is invalid. The expected type was a key "
-                "value mapping (a python dict) but we got an object of type: "
-                f"{type(patch)}"
+                "The configuration is invalid. Expected a key-"
+                f"value mapping (dict) but received: {type(patch)}"
             )
 
-        self.user_configs.append(patch)
+        self.__user_configs.append(patch)
         self.update(patch)
 
     def load_file(self, config_file: IO) -> None:
         """Load config options from the open file descriptor of a YAML file."""
-        try:
-            return self.load_dict(utils.yaml_load(config_file))
-        except YAMLError as e:
-            # MkDocs knows and understands ConfigurationErrors
-            raise exceptions.ConfigurationError(
-                f"MkDocs encountered an error parsing the configuration file: {e}"
-            )
+        warnings.warn(
+            "Config.load_file is not used since MkDocs 1.5 and will be removed soon. "
+            "Use MkDocsConfig.load_file instead",
+            DeprecationWarning,
+        )
+        return self.load_dict(utils.yaml_load(config_file))
+
+    @weak_property
+    def user_configs(self) -> Sequence[Mapping[str, Any]]:
+        warnings.warn(
+            "user_configs is never used in MkDocs and will be removed soon.", DeprecationWarning
+        )
+        return self.__user_configs
 
 
 @functools.lru_cache(maxsize=None)
@@ -278,13 +285,13 @@ class LegacyConfig(Config):
     A configuration object for plugins, as just a dict without type-safe attribute access.
     """
 
-    def __init__(self, schema: PlainConfigSchema, config_file_path: Optional[str] = None):
+    def __init__(self, schema: PlainConfigSchema, config_file_path: str | None = None):
         self._schema = tuple((k, v) for k, v in schema)  # Re-create just for validation
         super().__init__(config_file_path)
 
 
 @contextmanager
-def _open_config_file(config_file: Optional[Union[str, IO]]) -> Iterator[IO]:
+def _open_config_file(config_file: str | IO | None) -> Iterator[IO]:
     """
     A context manager which yields an open file descriptor ready to be read.
 
@@ -322,7 +329,10 @@ def _open_config_file(config_file: Optional[Union[str, IO]]) -> Iterator[IO]:
     else:
         log.debug(f"Loading configuration file: {result_config_file}")
         # Ensure file descriptor is at beginning
-        result_config_file.seek(0)
+        try:
+            result_config_file.seek(0)
+        except OSError:
+            pass
 
     try:
         yield result_config_file
@@ -331,7 +341,9 @@ def _open_config_file(config_file: Optional[Union[str, IO]]) -> Iterator[IO]:
             result_config_file.close()
 
 
-def load_config(config_file: Optional[Union[str, IO]] = None, **kwargs) -> MkDocsConfig:
+def load_config(
+    config_file: str | IO | None = None, *, config_file_path: str | None = None, **kwargs
+) -> MkDocsConfig:
     """
     Load the configuration for a given file object or name
 
@@ -353,7 +365,10 @@ def load_config(config_file: Optional[Union[str, IO]] = None, **kwargs) -> MkDoc
         # Initialize the config with the default schema.
         from mkdocs.config.defaults import MkDocsConfig
 
-        cfg = MkDocsConfig(config_file_path=getattr(fd, 'name', ''))
+        if config_file_path is None:
+            if fd is not sys.stdin.buffer:
+                config_file_path = getattr(fd, 'name', None)
+        cfg = MkDocsConfig(config_file_path=config_file_path)
         # load the config file
         cfg.load_file(fd)
 
@@ -372,10 +387,10 @@ def load_config(config_file: Optional[Union[str, IO]] = None, **kwargs) -> MkDoc
         log.debug(f"Config value '{key}' = {value!r}")
 
     if len(errors) > 0:
-        raise exceptions.Abort(f"Aborted with {len(errors)} Configuration Errors!")
-    elif cfg['strict'] and len(warnings) > 0:
+        raise exceptions.Abort(f"Aborted with {len(errors)} configuration errors!")
+    elif cfg.strict and len(warnings) > 0:
         raise exceptions.Abort(
-            f"Aborted with {len(warnings)} Configuration Warnings in 'strict' mode!"
+            f"Aborted with {len(warnings)} configuration warnings in 'strict' mode!"
         )
 
     return cfg

@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import contextlib
 import copy
 import io
@@ -6,7 +8,7 @@ import re
 import sys
 import textwrap
 import unittest
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Type, TypeVar
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, TypeVar
 from unittest.mock import patch
 
 if TYPE_CHECKING:
@@ -45,9 +47,9 @@ class TestCase(unittest.TestCase):
 
     def get_config(
         self,
-        config_class: Type[SomeConfig],
-        cfg: Dict[str, Any],
-        warnings: Dict[str, str] = {},
+        config_class: type[SomeConfig],
+        cfg: dict[str, Any],
+        warnings: dict[str, str] = {},
         config_file_path=None,
     ) -> SomeConfig:
         config = config_class(config_file_path=config_file_path)
@@ -676,6 +678,183 @@ class ListOfItemsTest(TestCase):
         with self.expect_error(option="'asdf' is not a valid port"):
             self.get_config(Schema, {'option': ["localhost:8000", "1.2.3.4:asdf"]})
 
+    def test_warning(self) -> None:
+        class Schema(Config):
+            option = c.ListOfItems(c.Deprecated())
+
+        self.get_config(
+            Schema,
+            {'option': ['a']},
+            warnings=dict(
+                option="The configuration option 'option[0]' has been "
+                "deprecated and will be removed in a future release."
+            ),
+        )
+
+
+class ExtraScriptsTest(TestCase):
+    def test_js_async(self) -> None:
+        class Schema(Config):
+            option = c.ListOfItems(c.ExtraScript(), default=[])
+
+        conf = self.get_config(Schema, {'option': ['foo.js', {'path': 'bar.js', 'async': True}]})
+        assert_type(conf.option, List[c.ExtraScriptValue])
+        self.assertEqual(len(conf.option), 2)
+        self.assertIsInstance(conf.option[0], c.ExtraScriptValue)
+        self.assertEqual(
+            [(x.path, x.type, x.defer, x.async_) for x in conf.option],
+            [
+                ('foo.js', '', False, False),
+                ('bar.js', '', False, True),
+            ],
+        )
+
+    def test_mjs(self) -> None:
+        class Schema(Config):
+            option = c.ListOfItems(c.ExtraScript(), default=[])
+
+        conf = self.get_config(
+            Schema, {'option': ['foo.mjs', {'path': 'bar.js', 'type': 'module'}]}
+        )
+        assert_type(conf.option, List[c.ExtraScriptValue])
+        self.assertEqual(len(conf.option), 2)
+        self.assertIsInstance(conf.option[0], c.ExtraScriptValue)
+        self.assertEqual(
+            [(x.path, x.type, x.defer, x.async_) for x in conf.option],
+            [
+                ('foo.mjs', 'module', False, False),
+                ('bar.js', 'module', False, False),
+            ],
+        )
+
+    def test_wrong_type(self) -> None:
+        class Schema(Config):
+            option = c.ListOfItems(c.ExtraScript(), default=[])
+
+        with self.expect_error(
+            option="The configuration is invalid. Expected a key-value mapping (dict) but received: <class 'int'>"
+        ):
+            self.get_config(Schema, {'option': [1]})
+
+    def test_unknown_key(self) -> None:
+        class Schema(Config):
+            option = c.ListOfItems(c.ExtraScript(), default=[])
+
+        conf = self.get_config(
+            Schema,
+            {'option': [{'path': 'foo.js', 'foo': 'bar'}]},
+            warnings=dict(option="Sub-option 'foo': Unrecognised configuration name: foo"),
+        )
+        self.assertEqual(
+            [(x.path, x.type, x.defer, x.async_) for x in conf.option],
+            [('foo.js', '', False, False)],
+        )
+
+
+class DictOfItemsTest(TestCase):
+    def test_int_type(self) -> None:
+        class Schema(Config):
+            option = c.DictOfItems(c.Type(int))
+
+        conf = self.get_config(Schema, {'option': {"a": 1, "b": 2}})
+        assert_type(conf.option, Dict[str, int])
+        self.assertEqual(conf.option, {"a": 1, "b": 2})
+
+        with self.expect_error(
+            option="Expected type: <class 'int'> but received: <class 'NoneType'>"
+        ):
+            conf = self.get_config(Schema, {'option': {"a": 1, "b": None}})
+
+    def test_combined_float_type(self) -> None:
+        class Schema(Config):
+            option = c.DictOfItems(c.Type((int, float)))
+
+        conf = self.get_config(Schema, {'option': {"a": 1, "b": 2.3}})
+        self.assertEqual(conf.option, {"a": 1, "b": 2.3})
+
+        with self.expect_error(
+            option="Expected type: (<class 'int'>, <class 'float'>) but received: <class 'str'>"
+        ):
+            self.get_config(Schema, {'option': {"a": 1, "b": "2"}})
+
+    def test_dict_default(self) -> None:
+        class Schema(Config):
+            option = c.DictOfItems(c.Type(int), default={})
+
+        conf = self.get_config(Schema, {})
+        assert_type(conf.option, Dict[str, int])
+        self.assertEqual(conf.option, {})
+
+        with self.expect_error(option="Required configuration not provided."):
+            conf = self.get_config(Schema, {'option': None})
+
+    def test_none_without_default(self) -> None:
+        class Schema(Config):
+            option = c.DictOfItems(c.Type(str))
+
+        with self.expect_error(option="Required configuration not provided."):
+            conf = self.get_config(Schema, {})
+
+        with self.expect_error(option="Required configuration not provided."):
+            conf = self.get_config(Schema, {'option': None})
+
+        conf = self.get_config(Schema, {'option': {"foo": "bar"}})
+        self.assertEqual(conf.option, {"foo": "bar"})
+
+    def test_optional(self) -> None:
+        class Schema(Config):
+            option = c.Optional(c.DictOfItems(c.Type(str)))
+
+        conf = self.get_config(Schema, {})
+        assert_type(conf.option, Optional[Dict[str, str]])
+        self.assertEqual(conf.option, None)
+
+        conf = self.get_config(Schema, {'option': None})
+        self.assertEqual(conf.option, None)
+
+        conf = self.get_config(Schema, {'option': {"foo": "bar"}})
+        self.assertEqual(conf.option, {"foo": "bar"})
+
+    def test_dict_of_optional(self) -> None:
+        class Schema(Config):
+            option = c.DictOfItems(c.Optional(c.Type(int)), default={})
+
+        conf = self.get_config(Schema, {})
+        assert_type(conf.option, Dict[str, Optional[int]])
+        self.assertEqual(conf.option, {})
+
+        conf = self.get_config(Schema, {'option': {"a": 1, "b": None}})
+        self.assertEqual(conf.option, {"a": 1, "b": None})
+
+        with self.expect_error(option="Expected type: <class 'int'> but received: <class 'str'>"):
+            conf = self.get_config(Schema, {'option': {"foo": "bar"}})
+            self.assertEqual(conf.option, {"foo": "bar"})
+
+    def test_string_not_a_dict_of_strings(self) -> None:
+        class Schema(Config):
+            option = c.DictOfItems(c.Type(str))
+
+        with self.expect_error(option="Expected a dict of items, but a <class 'str'> was given."):
+            self.get_config(Schema, {'option': 'foo'})
+
+    def test_post_validation_error(self) -> None:
+        class Schema(Config):
+            option = c.DictOfItems(c.IpAddress())
+
+        with self.expect_error(option="'asdf' is not a valid port"):
+            self.get_config(
+                Schema, {'option': {"ip_foo": "localhost:8000", "ip_bar": "1.2.3.4:asdf"}}
+            )
+
+    def test_all_keys_are_strings(self) -> None:
+        class Schema(Config):
+            option = c.DictOfItems(c.Type(int))
+
+        with self.expect_error(
+            option="Expected type: <class 'str'> for keys, but received: <class 'int'> (key=2)"
+        ):
+            self.get_config(Schema, {'option': {"a": 1, 2: 3}})
+
 
 class FilesystemObjectTest(TestCase):
     def test_valid_dir(self) -> None:
@@ -997,6 +1176,7 @@ class ThemeTest(TestCase):
 
         conf = self.get_config(Schema, {'option': config})
         self.assertEqual(conf.option.name, 'mkdocs')
+        self.assertEqual(conf.option.custom_dir, custom_dir)
         self.assertIn(custom_dir, conf.option.dirs)
         self.assertEqual(
             conf.option.static_templates,
@@ -1121,7 +1301,7 @@ class ThemeTest(TestCase):
             theme = c.Theme()
 
         conf = self.get_config(Schema, config)
-        self.assertEqual(conf.theme['locale'].language, 'fr')
+        self.assertEqual(conf.theme.locale.language, 'fr')
 
 
 class NavTest(TestCase):
@@ -1211,7 +1391,7 @@ class NavTest(TestCase):
 class PrivateTest(TestCase):
     def test_defined(self) -> None:
         class Schema(Config):
-            option = c.Private()
+            option = c.Private[Any]()
 
         with self.expect_error(option="For internal use only."):
             self.get_config(Schema, {'option': 'somevalue'})
@@ -1227,8 +1407,8 @@ class SubConfigTest(TestCase):
             with self.subTest(val):
                 with self.expect_error(
                     option=re.compile(
-                        r"The configuration is invalid. The expected type was a key value mapping "
-                        r"\(a python dict\) but we got an object of type: .+"
+                        r"The configuration is invalid. Expected a key-value mapping "
+                        r"\(dict\) but received: .+"
                     )
                 ):
                     self.get_config(Schema, {'option': val})
@@ -1353,8 +1533,8 @@ class SubConfigTest(TestCase):
             conf = self.get_config(Schema, {'sub': [{'opt': 'z'}, {'opt': 2}]})
 
         with self.expect_error(
-            sub="The configuration is invalid. The expected type was a key value mapping "
-            "(a python dict) but we got an object of type: <class 'int'>"
+            sub="The configuration is invalid. Expected a key-value mapping "
+            "(dict) but received: <class 'int'>"
         ):
             conf = self.get_config(Schema, {'sub': [1, 2]})
 
@@ -1372,19 +1552,40 @@ class SubConfigTest(TestCase):
         with self.expect_error(sub="Required configuration not provided."):
             conf = self.get_config(Schema, {'sub': None})
 
+    def test_config_file_path_pass_through(self) -> None:
+        """Necessary to ensure FilesystemObject validates the correct path"""
+
+        passed_config_path = None
+
+        class SubType(c.BaseConfigOption):
+            def pre_validation(self, config: Config, key_name: str) -> None:
+                nonlocal passed_config_path
+                passed_config_path = config.config_file_path
+
+        class Sub(Config):
+            opt = SubType()
+
+        class Schema(Config):
+            sub = c.ListOfItems(c.SubConfig(Sub), default=[])
+
+        config_path = "foo/mkdocs.yaml"
+        self.get_config(Schema, {"sub": [{"opt": "bar"}]}, config_file_path=config_path)
+        self.assertEqual(passed_config_path, config_path)
+
 
 class MarkdownExtensionsTest(TestCase):
     @patch('markdown.Markdown')
     def test_simple_list(self, mock_md) -> None:
         class Schema(Config):
             markdown_extensions = c.MarkdownExtensions()
-            mdx_configs = c.Private()
+            mdx_configs = c.Private[Dict[str, dict]]()
 
         config = {
             'markdown_extensions': ['foo', 'bar'],
         }
         conf = self.get_config(Schema, config)
         assert_type(conf.markdown_extensions, List[str])
+        assert_type(conf.mdx_configs, Dict[str, dict])
         self.assertEqual(conf.markdown_extensions, ['foo', 'bar'])
         self.assertEqual(conf.mdx_configs, {})
 
@@ -1392,7 +1593,7 @@ class MarkdownExtensionsTest(TestCase):
     def test_list_dicts(self, mock_md) -> None:
         class Schema(Config):
             markdown_extensions = c.MarkdownExtensions()
-            mdx_configs = c.Private()
+            mdx_configs = c.Private[Dict[str, dict]]()
 
         config = {
             'markdown_extensions': [
@@ -1415,7 +1616,7 @@ class MarkdownExtensionsTest(TestCase):
     def test_mixed_list(self, mock_md) -> None:
         class Schema(Config):
             markdown_extensions = c.MarkdownExtensions()
-            mdx_configs = c.Private()
+            mdx_configs = c.Private[Dict[str, dict]]()
 
         config = {
             'markdown_extensions': [
@@ -1436,7 +1637,7 @@ class MarkdownExtensionsTest(TestCase):
     def test_dict_of_dicts(self, mock_md) -> None:
         class Schema(Config):
             markdown_extensions = c.MarkdownExtensions()
-            mdx_configs = c.Private()
+            mdx_configs = c.Private[Dict[str, dict]]()
 
         config = {
             'markdown_extensions': {
@@ -1459,7 +1660,7 @@ class MarkdownExtensionsTest(TestCase):
     def test_builtins(self, mock_md) -> None:
         class Schema(Config):
             markdown_extensions = c.MarkdownExtensions(builtins=['meta', 'toc'])
-            mdx_configs = c.Private()
+            mdx_configs = c.Private[Dict[str, dict]]()
 
         config = {
             'markdown_extensions': ['foo', 'bar'],
@@ -1471,7 +1672,7 @@ class MarkdownExtensionsTest(TestCase):
     def test_duplicates(self) -> None:
         class Schema(Config):
             markdown_extensions = c.MarkdownExtensions(builtins=['meta', 'toc'])
-            mdx_configs = c.Private()
+            mdx_configs = c.Private[Dict[str, dict]]()
 
         config = {
             'markdown_extensions': ['meta', 'toc'],
@@ -1483,7 +1684,7 @@ class MarkdownExtensionsTest(TestCase):
     def test_builtins_config(self) -> None:
         class Schema(Config):
             markdown_extensions = c.MarkdownExtensions(builtins=['meta', 'toc'])
-            mdx_configs = c.Private()
+            mdx_configs = c.Private[Dict[str, dict]]()
 
         config = {
             'markdown_extensions': [
@@ -1498,7 +1699,7 @@ class MarkdownExtensionsTest(TestCase):
     def test_configkey(self, mock_md) -> None:
         class Schema(Config):
             markdown_extensions = c.MarkdownExtensions(configkey='bar')
-            bar = c.Private()
+            bar = c.Private[Dict[str, dict]]()
 
         config = {
             'markdown_extensions': [
@@ -1517,7 +1718,7 @@ class MarkdownExtensionsTest(TestCase):
     def test_missing_default(self) -> None:
         class Schema(Config):
             markdown_extensions = c.MarkdownExtensions()
-            mdx_configs = c.Private()
+            mdx_configs = c.Private[Dict[str, dict]]()
 
         conf = self.get_config(Schema, {})
         self.assertEqual(conf.markdown_extensions, [])
@@ -1526,7 +1727,7 @@ class MarkdownExtensionsTest(TestCase):
     def test_none(self) -> None:
         class Schema(Config):
             markdown_extensions = c.MarkdownExtensions(default=[])
-            mdx_configs = c.Private()
+            mdx_configs = c.Private[Dict[str, dict]]()
 
         config = {
             'markdown_extensions': None,
@@ -1601,7 +1802,7 @@ class MarkdownExtensionsTest(TestCase):
         # config instances that didn't specify extensions.
         class Schema(Config):
             markdown_extensions = c.MarkdownExtensions()
-            mdx_configs = c.Private()
+            mdx_configs = c.Private[Dict[str, dict]]()
 
         conf = self.get_config(
             Schema,
@@ -1633,7 +1834,7 @@ class _FakePlugin2Config(_FakePluginConfig):
 
 
 class FakePlugin2(BasePlugin[_FakePlugin2Config]):
-    pass
+    supports_multiple_instances = True
 
 
 class ThemePlugin(BasePlugin[_FakePluginConfig]):
@@ -1804,11 +2005,62 @@ class PluginsTest(TestCase):
         self.assertEqual(set(conf.plugins), {'overridden'})
         self.assertIsInstance(conf.plugins['overridden'], FakePlugin2)
 
+    def test_plugin_config_with_multiple_instances(self, mock_class) -> None:
+        class Schema(Config):
+            theme = c.Theme(default='mkdocs')
+            plugins = c.Plugins(theme_key='theme')
+
+        cfg = {
+            'plugins': [
+                {'sample2': {'foo': 'foo value', 'bar': 42}},
+                {'sample2': {'foo': 'foo2 value'}},
+            ],
+        }
+        conf = self.get_config(Schema, cfg)
+
+        self.assertEqual(
+            set(conf.plugins),
+            {'sample2', 'sample2 #2'},
+        )
+        self.assertEqual(conf.plugins['sample2'].config['bar'], 42)
+        self.assertEqual(conf.plugins['sample2 #2'].config['bar'], 0)
+
+    def test_plugin_config_with_multiple_instances_and_warning(self, mock_class) -> None:
+        class Schema(Config):
+            theme = c.Theme(default='mkdocs')
+            plugins = c.Plugins(theme_key='theme')
+
+        test_cfgs: list[dict[str, Any]] = [
+            {
+                'theme': 'readthedocs',
+                'plugins': [{'sub_plugin': {}}, {'sample2': {}}, {'sub_plugin': {}}, 'sample2'],
+            },
+            {
+                'theme': 'readthedocs',
+                'plugins': ['sub_plugin', 'sample2', 'sample2', 'sub_plugin'],
+            },
+        ]
+
+        for cfg in test_cfgs:
+            conf = self.get_config(
+                Schema,
+                cfg,
+                warnings=dict(
+                    plugins="Plugin 'readthedocs/sub_plugin' was specified multiple times - "
+                    "this is likely a mistake, because the plugin doesn't declare "
+                    "`supports_multiple_instances`."
+                ),
+            )
+            self.assertEqual(
+                set(conf.plugins),
+                {'readthedocs/sub_plugin', 'readthedocs/sub_plugin #2', 'sample2', 'sample2 #2'},
+            )
+
     def test_plugin_config_empty_list_with_empty_default(self, mock_class) -> None:
         class Schema(Config):
             plugins = c.Plugins(default=[])
 
-        cfg: Dict[str, Any] = {'plugins': []}
+        cfg: dict[str, Any] = {'plugins': []}
         conf = self.get_config(Schema, cfg)
 
         self.assertIsInstance(conf.plugins, PluginCollection)
@@ -1819,7 +2071,7 @@ class PluginsTest(TestCase):
             plugins = c.Plugins(default=['sample'])
 
         # Default is ignored
-        cfg: Dict[str, Any] = {'plugins': []}
+        cfg: dict[str, Any] = {'plugins': []}
         conf = self.get_config(Schema, cfg)
 
         self.assertIsInstance(conf.plugins, PluginCollection)

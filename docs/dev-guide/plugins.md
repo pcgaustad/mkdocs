@@ -16,8 +16,8 @@ pip install mkdocs-foo-plugin
 ```
 
 Once a plugin has been successfully installed, it is ready to use. It just needs
-to be [enabled](#using-plugins) in the configuration file. The [MkDocs Plugins]
-wiki page has a growing list of plugins that you can install and use.
+to be [enabled](#using-plugins) in the configuration file. The [Catalog]
+repository has a large ranked list of plugins that you can install and use.
 
 ## Using Plugins
 
@@ -110,7 +110,7 @@ class MyPlugin(mkdocs.plugins.BasePlugin):
 > from mkdocs.config import base, config_options as c
 >
 > class _ValidationOptions(base.Config):
->     enable = c.Type(bool, default=True)
+>     enabled = c.Type(bool, default=True)
 >     verbose = c.Type(bool, default=False)
 >     skip_checks = c.ListOfItems(c.Choice(('foo', 'bar', 'baz')), default=[])
 >
@@ -130,7 +130,7 @@ class MyPlugin(mkdocs.plugins.BasePlugin):
 > my_plugin:
 >   definition_file: configs/test.ini  # relative to mkdocs.yml
 >   validation:
->     enable: !ENV [CI, false]
+>     enabled: !ENV [CI, false]
 >     verbose: true
 >     skip_checks:
 >       - foo
@@ -239,7 +239,7 @@ class MyPlugin(BasePlugin):
 > ```python
 > def on_config(self, config: MkDocsConfig):
 >     config.theme.static_templates.add('my_template.html')
->         return config
+>     return config
 > ```
 
 ### Events
@@ -474,6 +474,13 @@ class MyPlugin(BasePlugin):
         ...
 ```
 
+### Logging in plugins
+
+MkDocs provides a `get_plugin_logger` function which returns
+a logger that can be used to log messages.
+
+#### ::: mkdocs.plugins.get_plugin_logger
+
 ### Entry Point
 
 Plugins need to be packaged as Python libraries (distributed on PyPI separate
@@ -507,6 +514,10 @@ entry_points={
 Note that registering a plugin does not activate it. The user still needs to
 tell MkDocs to use it via the config.
 
+### Publishing a Plugin
+
+You should publish a package on [PyPI], then add it to the [Catalog] for discoverability. Plugins are strongly recommended to have a unique plugin name (entry point name) according to the catalog.
+
 [BasePlugin]:#baseplugin
 [config]: ../user-guide/configuration.md#plugins
 [entry point]: #entry-point
@@ -519,5 +530,6 @@ tell MkDocs to use it via the config.
 [post_template]: #on_post_template
 [static_templates]: ../user-guide/configuration.md#static_templates
 [Template Events]: #template-events
-[MkDocs Plugins]: https://github.com/mkdocs/mkdocs/wiki/MkDocs-Plugins
+[catalog]: https://github.com/mkdocs/catalog
 [on_build_error]: #on_build_error
+[PyPI]: https://pypi.org/

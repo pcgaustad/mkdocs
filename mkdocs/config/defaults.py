@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+from typing import IO, Dict
+
+import mkdocs.structure.pages
 from mkdocs.config import base
 from mkdocs.config import config_options as c
+from mkdocs.utils.yaml import get_yaml_loader, yaml_load
 
 
 def get_schema() -> base.PlainConfigSchema:
@@ -14,8 +18,8 @@ def get_schema() -> base.PlainConfigSchema:
 class MkDocsConfig(base.Config):
     """The configuration of MkDocs itself (the root object of mkdocs.yml)."""
 
-    config_file_path: str = c.Optional(c.Type(str))  # type: ignore[assignment]
-    """Reserved for internal use, stores the mkdocs.yml config file."""
+    config_file_path: str = c.Type(str)  # type: ignore[assignment]
+    """The path to the mkdocs.yml config file. Can't be populated from the config."""
 
     site_name = c.Type(str)
     """The title to use for the documentation."""
@@ -23,6 +27,12 @@ class MkDocsConfig(base.Config):
     nav = c.Optional(c.Nav())
     """Defines the structure of the navigation."""
     pages = c.Deprecated(removed=True, moved_to='nav')
+
+    exclude_docs = c.Optional(c.PathSpec())
+    """Gitignore-like patterns of files (relative to docs dir) to exclude from the site."""
+
+    not_in_nav = c.Optional(c.PathSpec())
+    """Gitignore-like patterns of files (relative to docs dir) that are not intended to be in the nav."""
 
     site_url = c.Optional(c.URL(is_dir=True))
     """The full URL to where the documentation will be hosted."""
@@ -84,7 +94,7 @@ class MkDocsConfig(base.Config):
     is ignored."""
 
     extra_css = c.Type(list, default=[])
-    extra_javascript = c.Type(list, default=[])
+    extra_javascript = c.ListOfItems(c.ExtraScript(), default=[])
     """Specify which css or javascript files from the docs directory should be
     additionally included in the site."""
 
@@ -97,8 +107,8 @@ class MkDocsConfig(base.Config):
     )
     """PyMarkdown extension names."""
 
-    mdx_configs = c.Private()
-    """PyMarkdown Extension Configs. For internal use only."""
+    mdx_configs = c.Private[Dict[str, dict]]()
+    """PyMarkdown extension configs. Populated from `markdown_extensions`."""
 
     strict = c.Type(bool, default=False)
     """Enabling strict mode causes MkDocs to stop the build when a problem is
@@ -128,3 +138,17 @@ class MkDocsConfig(base.Config):
 
     watch = c.ListOfPaths(default=[])
     """A list of extra paths to watch while running `mkdocs serve`."""
+
+    _current_page: mkdocs.structure.pages.Page | None = None
+    """The currently rendered page. Please do not access this and instead
+    rely on the `page` argument to event handlers."""
+
+    def load_dict(self, patch: dict) -> None:
+        super().load_dict(patch)
+        if 'config_file_path' in patch:
+            raise base.ValidationError("Can't set config_file_path in config")
+
+    def load_file(self, config_file: IO) -> None:
+        """Load config options from the open file descriptor of a YAML file."""
+        loader = get_yaml_loader(config=self)
+        self.load_dict(yaml_load(config_file, loader))
