@@ -11,7 +11,6 @@ from pathlib import PurePath
 from typing import TYPE_CHECKING, Callable, Iterable, Iterator, Sequence
 from urllib.parse import quote as urlquote
 
-import jinja2.environment
 import pathspec
 import pathspec.gitignore
 import pathspec.util
@@ -19,6 +18,8 @@ import pathspec.util
 from mkdocs import utils
 
 if TYPE_CHECKING:
+    import jinja2.environment
+
     from mkdocs.config.defaults import MkDocsConfig
     from mkdocs.structure.pages import Page
 
@@ -27,7 +28,9 @@ log = logging.getLogger(__name__)
 
 
 class InclusionLevel(enum.Enum):
-    EXCLUDED = -2
+    EXCLUDED = -3
+    """The file is excluded and will not be processed."""
+    DRAFT = -2
     """The file is excluded from the final site, but will still be populated during `mkdocs serve`."""
     NOT_IN_NAV = -1
     """The file is part of the site, but doesn't produce nav warnings."""
@@ -40,10 +43,13 @@ class InclusionLevel(enum.Enum):
         return True
 
     def is_included(self):
-        return self.value > self.EXCLUDED.value
+        return self.value > self.DRAFT.value
 
     def is_excluded(self):
-        return self.value <= self.EXCLUDED.value
+        return self.value <= self.DRAFT.value
+
+    def is_in_serve(self):
+        return self.value >= self.DRAFT.value
 
     def is_in_nav(self):
         return self.value > self.NOT_IN_NAV.value
@@ -78,8 +84,10 @@ class Files:
 
     @property
     def src_uris(self) -> dict[str, File]:
-        """A mapping containing every file, with the keys being their
-        [`src_uri`][mkdocs.structure.files.File.src_uri]."""
+        """
+        A mapping containing every file, with the keys being their
+        [`src_uri`][mkdocs.structure.files.File.src_uri].
+        """
         if self._src_uris is None:
             self._src_uris = {file.src_uri: file for file in self._files}
         return self._src_uris
@@ -190,7 +198,7 @@ class File:
     url: str
     """The URI of the destination file relative to the destination directory as a string."""
 
-    inclusion: InclusionLevel
+    inclusion: InclusionLevel = InclusionLevel.UNDEFINED
     """Whether the file will be excluded from the built site."""
 
     @property
@@ -233,14 +241,6 @@ class File:
         self.abs_src_path = os.path.normpath(os.path.join(src_dir, self.src_uri))
         self.abs_dest_path = os.path.normpath(os.path.join(dest_dir, self.dest_uri))
         self.inclusion = inclusion
-
-    def __eq__(self, other) -> bool:
-        return (
-            isinstance(other, self.__class__)
-            and self.src_uri == other.src_uri
-            and self.abs_src_path == other.abs_src_path
-            and self.url == other.url
-        )
 
     def __repr__(self):
         return (
@@ -319,16 +319,19 @@ class File:
 _default_exclude = pathspec.gitignore.GitIgnoreSpec.from_lines(['.*', '/templates/'])
 
 
-def _set_exclusions(files: Iterable[File], config: MkDocsConfig) -> None:
+def set_exclusions(files: Iterable[File], config: MkDocsConfig) -> None:
     """Re-calculate which files are excluded, based on the patterns in the config."""
     exclude: pathspec.gitignore.GitIgnoreSpec | None = config.get('exclude_docs')
     exclude = _default_exclude + exclude if exclude else _default_exclude
+    drafts: pathspec.gitignore.GitIgnoreSpec | None = config.get('draft_docs')
     nav_exclude: pathspec.gitignore.GitIgnoreSpec | None = config.get('not_in_nav')
 
     for file in files:
         if file.inclusion == InclusionLevel.UNDEFINED:
             if exclude.match_file(file.src_uri):
                 file.inclusion = InclusionLevel.EXCLUDED
+            elif drafts and drafts.match_file(file.src_uri):
+                file.inclusion = InclusionLevel.DRAFT
             elif nav_exclude and nav_exclude.match_file(file.src_uri):
                 file.inclusion = InclusionLevel.NOT_IN_NAV
             else:
@@ -359,7 +362,7 @@ def get_files(config: MkDocsConfig) -> Files:
             files.append(file)
             prev_file = file
 
-    _set_exclusions(files, config)
+    set_exclusions(files, config)
     # Skip README.md if an index file also exists in dir (part 2)
     for a, b in conflicting_files:
         if b.inclusion.is_included():
@@ -367,9 +370,15 @@ def get_files(config: MkDocsConfig) -> Files:
                 log.warning(
                     f"Excluding '{a.src_uri}' from the site because it conflicts with '{b.src_uri}'."
                 )
-            files.remove(a)
+            try:
+                files.remove(a)
+            except ValueError:
+                pass  # Catching this to avoid errors if attempting to remove the same file twice.
         else:
-            files.remove(b)
+            try:
+                files.remove(b)
+            except ValueError:
+                pass
 
     return Files(files)
 

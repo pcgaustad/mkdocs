@@ -3,13 +3,14 @@ from __future__ import annotations
 import contextlib
 import copy
 import io
+import logging
 import os
 import re
 import sys
 import textwrap
 import unittest
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, TypeVar
-from unittest.mock import patch
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, TypeVar, Union
+from unittest import mock
 
 if TYPE_CHECKING:
     from typing_extensions import assert_type
@@ -21,6 +22,7 @@ else:
 
 import mkdocs
 from mkdocs.config import config_options as c
+from mkdocs.config import defaults
 from mkdocs.config.base import Config
 from mkdocs.plugins import BasePlugin, PluginCollection
 from mkdocs.tests.base import tempdir
@@ -698,14 +700,14 @@ class ExtraScriptsTest(TestCase):
             option = c.ListOfItems(c.ExtraScript(), default=[])
 
         conf = self.get_config(Schema, {'option': ['foo.js', {'path': 'bar.js', 'async': True}]})
-        assert_type(conf.option, List[c.ExtraScriptValue])
+        assert_type(conf.option, List[Union[c.ExtraScriptValue, str]])
         self.assertEqual(len(conf.option), 2)
-        self.assertIsInstance(conf.option[0], c.ExtraScriptValue)
+        self.assertIsInstance(conf.option[1], c.ExtraScriptValue)
         self.assertEqual(
-            [(x.path, x.type, x.defer, x.async_) for x in conf.option],
+            conf.option,
             [
-                ('foo.js', '', False, False),
-                ('bar.js', '', False, True),
+                'foo.js',
+                {'path': 'bar.js', 'type': '', 'defer': False, 'async': True},
             ],
         )
 
@@ -716,14 +718,14 @@ class ExtraScriptsTest(TestCase):
         conf = self.get_config(
             Schema, {'option': ['foo.mjs', {'path': 'bar.js', 'type': 'module'}]}
         )
-        assert_type(conf.option, List[c.ExtraScriptValue])
+        assert_type(conf.option, List[Union[c.ExtraScriptValue, str]])
         self.assertEqual(len(conf.option), 2)
         self.assertIsInstance(conf.option[0], c.ExtraScriptValue)
         self.assertEqual(
-            [(x.path, x.type, x.defer, x.async_) for x in conf.option],
+            conf.option,
             [
-                ('foo.mjs', 'module', False, False),
-                ('bar.js', 'module', False, False),
+                {'path': 'foo.mjs', 'type': 'module', 'defer': False, 'async': False},
+                {'path': 'bar.js', 'type': 'module', 'defer': False, 'async': False},
             ],
         )
 
@@ -746,8 +748,8 @@ class ExtraScriptsTest(TestCase):
             warnings=dict(option="Sub-option 'foo': Unrecognised configuration name: foo"),
         )
         self.assertEqual(
-            [(x.path, x.type, x.defer, x.async_) for x in conf.option],
-            [('foo.js', '', False, False)],
+            conf.option,
+            [{'path': 'foo.js', 'type': '', 'defer': False, 'async': False, 'foo': 'bar'}],
         )
 
 
@@ -1112,7 +1114,6 @@ class SiteDirTest(TestCase):
 
     def test_common_prefix(self) -> None:
         """Legitimate settings with common prefixes should not fail validation."""
-
         test_configs = (
             {'docs_dir': 'docs', 'site_dir': 'docs-site'},
             {'docs_dir': 'site-docs', 'site_dir': 'site'},
@@ -1135,14 +1136,15 @@ class ThemeTest(TestCase):
 
     def test_uninstalled_theme_as_string(self) -> None:
         class Schema(Config):
-            option = c.Theme()
+            theme = c.Theme()
+            plugins = c.Plugins(theme_key='theme')
 
         with self.expect_error(
-            option=re.compile(
+            theme=re.compile(
                 r"Unrecognised theme name: 'mkdocs2'. The available installed themes are: .+"
             )
         ):
-            self.get_config(Schema, {'option': "mkdocs2"})
+            self.get_config(Schema, {'theme': "mkdocs2", 'plugins': "search"})
 
     def test_theme_default(self) -> None:
         class Schema(Config):
@@ -1328,8 +1330,8 @@ class NavTest(TestCase):
             - Home: index.md
             - getting-started.md
             - User Guide:
-                - Overview: user-guide/index.md
-                - Installation: user-guide/installation.md
+              - Overview: user-guide/index.md
+              - Installation: user-guide/installation.md
             '''
         )
         nav = yaml_load(io.StringIO(nav_yaml))
@@ -1553,8 +1555,7 @@ class SubConfigTest(TestCase):
             conf = self.get_config(Schema, {'sub': None})
 
     def test_config_file_path_pass_through(self) -> None:
-        """Necessary to ensure FilesystemObject validates the correct path"""
-
+        """Necessary to ensure FilesystemObject validates the correct path."""
         passed_config_path = None
 
         class SubType(c.BaseConfigOption):
@@ -1573,9 +1574,98 @@ class SubConfigTest(TestCase):
         self.assertEqual(passed_config_path, config_path)
 
 
+class NestedSubConfigTest(TestCase):
+    def defaults(self):
+        return {
+            'nav': {
+                'omitted_files': logging.INFO,
+                'not_found': logging.WARNING,
+                'absolute_links': logging.INFO,
+            },
+            'links': {
+                'not_found': logging.WARNING,
+                'absolute_links': logging.INFO,
+                'unrecognized_links': logging.INFO,
+                'anchors': logging.INFO,
+            },
+        }
+
+    class Schema(Config):
+        validation = c.PropagatingSubConfig[defaults.MkDocsConfig.Validation]()
+
+    def test_unspecified(self) -> None:
+        for cfg in {}, {'validation': {}}:
+            with self.subTest(cfg):
+                conf = self.get_config(
+                    self.Schema,
+                    {},
+                )
+                self.assertEqual(conf.validation, self.defaults())
+
+    def test_sets_nested_and_not_nested(self) -> None:
+        conf = self.get_config(
+            self.Schema,
+            {'validation': {'not_found': 'ignore', 'links': {'absolute_links': 'warn'}}},
+        )
+        expected = self.defaults()
+        expected['nav']['not_found'] = logging.DEBUG
+        expected['links']['not_found'] = logging.DEBUG
+        expected['links']['absolute_links'] = logging.WARNING
+        self.assertEqual(conf.validation, expected)
+
+    def test_sets_nested_different(self) -> None:
+        conf = self.get_config(
+            self.Schema,
+            {'validation': {'not_found': 'ignore', 'links': {'not_found': 'warn'}}},
+        )
+        expected = self.defaults()
+        expected['nav']['not_found'] = logging.DEBUG
+        expected['links']['not_found'] = logging.WARNING
+        self.assertEqual(conf.validation, expected)
+
+    def test_sets_only_one_nested(self) -> None:
+        conf = self.get_config(
+            self.Schema,
+            {'validation': {'omitted_files': 'ignore'}},
+        )
+        expected = self.defaults()
+        expected['nav']['omitted_files'] = logging.DEBUG
+        self.assertEqual(conf.validation, expected)
+
+    def test_sets_nested_not_dict(self) -> None:
+        with self.expect_error(
+            validation="Sub-option 'links': Sub-option 'unrecognized_links': Expected a string, but a <class 'list'> was given."
+        ):
+            self.get_config(
+                self.Schema,
+                {'validation': {'unrecognized_links': [], 'links': {'absolute_links': 'warn'}}},
+            )
+
+    def test_wrong_key_nested(self) -> None:
+        conf = self.get_config(
+            self.Schema,
+            {'validation': {'foo': 'warn', 'not_found': 'warn'}},
+            warnings=dict(validation="Sub-option 'foo': Unrecognised configuration name: foo"),
+        )
+        expected = self.defaults()
+        expected['nav']['not_found'] = logging.WARNING
+        expected['links']['not_found'] = logging.WARNING
+        expected['foo'] = 'warn'
+        self.assertEqual(conf.validation, expected)
+
+    def test_wrong_type_nested(self) -> None:
+        with self.expect_error(
+            validation="Sub-option 'nav': Sub-option 'omitted_files': Expected one of ['warn', 'info', 'ignore'], got 'hi'"
+        ):
+            self.get_config(
+                self.Schema,
+                {'validation': {'omitted_files': 'hi'}},
+            )
+
+
 class MarkdownExtensionsTest(TestCase):
-    @patch('markdown.Markdown')
-    def test_simple_list(self, mock_md) -> None:
+    @mock.patch('markdown.Markdown', mock.Mock())
+    def test_simple_list(self) -> None:
         class Schema(Config):
             markdown_extensions = c.MarkdownExtensions()
             mdx_configs = c.Private[Dict[str, dict]]()
@@ -1589,8 +1679,8 @@ class MarkdownExtensionsTest(TestCase):
         self.assertEqual(conf.markdown_extensions, ['foo', 'bar'])
         self.assertEqual(conf.mdx_configs, {})
 
-    @patch('markdown.Markdown')
-    def test_list_dicts(self, mock_md) -> None:
+    @mock.patch('markdown.Markdown', mock.Mock())
+    def test_list_dicts(self) -> None:
         class Schema(Config):
             markdown_extensions = c.MarkdownExtensions()
             mdx_configs = c.Private[Dict[str, dict]]()
@@ -1612,8 +1702,8 @@ class MarkdownExtensionsTest(TestCase):
             },
         )
 
-    @patch('markdown.Markdown')
-    def test_mixed_list(self, mock_md) -> None:
+    @mock.patch('markdown.Markdown', mock.Mock())
+    def test_mixed_list(self) -> None:
         class Schema(Config):
             markdown_extensions = c.MarkdownExtensions()
             mdx_configs = c.Private[Dict[str, dict]]()
@@ -1633,8 +1723,8 @@ class MarkdownExtensionsTest(TestCase):
             },
         )
 
-    @patch('markdown.Markdown')
-    def test_dict_of_dicts(self, mock_md) -> None:
+    @mock.patch('markdown.Markdown', mock.Mock())
+    def test_dict_of_dicts(self) -> None:
         class Schema(Config):
             markdown_extensions = c.MarkdownExtensions()
             mdx_configs = c.Private[Dict[str, dict]]()
@@ -1656,8 +1746,8 @@ class MarkdownExtensionsTest(TestCase):
             },
         )
 
-    @patch('markdown.Markdown')
-    def test_builtins(self, mock_md) -> None:
+    @mock.patch('markdown.Markdown', mock.Mock())
+    def test_builtins(self) -> None:
         class Schema(Config):
             markdown_extensions = c.MarkdownExtensions(builtins=['meta', 'toc'])
             mdx_configs = c.Private[Dict[str, dict]]()
@@ -1695,8 +1785,8 @@ class MarkdownExtensionsTest(TestCase):
         self.assertEqual(conf.markdown_extensions, ['meta', 'toc'])
         self.assertEqual(conf.mdx_configs, {'toc': {'permalink': True}})
 
-    @patch('markdown.Markdown')
-    def test_configkey(self, mock_md) -> None:
+    @mock.patch('markdown.Markdown', mock.Mock())
+    def test_configkey(self) -> None:
         class Schema(Config):
             markdown_extensions = c.MarkdownExtensions(configkey='bar')
             bar = c.Private[Dict[str, dict]]()
@@ -1736,16 +1826,16 @@ class MarkdownExtensionsTest(TestCase):
         self.assertEqual(conf.markdown_extensions, [])
         self.assertEqual(conf.mdx_configs, {})
 
-    @patch('markdown.Markdown')
-    def test_not_list(self, mock_md) -> None:
+    @mock.patch('markdown.Markdown', mock.Mock())
+    def test_not_list(self) -> None:
         class Schema(Config):
             option = c.MarkdownExtensions()
 
         with self.expect_error(option="Invalid Markdown Extensions configuration"):
             self.get_config(Schema, {'option': 'not a list'})
 
-    @patch('markdown.Markdown')
-    def test_invalid_config_option(self, mock_md) -> None:
+    @mock.patch('markdown.Markdown', mock.Mock())
+    def test_invalid_config_option(self) -> None:
         class Schema(Config):
             markdown_extensions = c.MarkdownExtensions()
 
@@ -1759,8 +1849,8 @@ class MarkdownExtensionsTest(TestCase):
         ):
             self.get_config(Schema, config)
 
-    @patch('markdown.Markdown')
-    def test_invalid_config_item(self, mock_md) -> None:
+    @mock.patch('markdown.Markdown', mock.Mock())
+    def test_invalid_config_item(self) -> None:
         class Schema(Config):
             markdown_extensions = c.MarkdownExtensions()
 
@@ -1772,8 +1862,8 @@ class MarkdownExtensionsTest(TestCase):
         with self.expect_error(markdown_extensions="Invalid Markdown Extensions configuration"):
             self.get_config(Schema, config)
 
-    @patch('markdown.Markdown')
-    def test_invalid_dict_item(self, mock_md) -> None:
+    @mock.patch('markdown.Markdown', mock.Mock())
+    def test_invalid_dict_item(self) -> None:
         class Schema(Config):
             markdown_extensions = c.MarkdownExtensions()
 
@@ -1837,6 +1927,15 @@ class FakePlugin2(BasePlugin[_FakePlugin2Config]):
     supports_multiple_instances = True
 
 
+class _EnabledPluginConfig(Config):
+    enabled = c.Type(bool, default=True)
+    bar = c.Type(int, default=0)
+
+
+class EnabledPlugin(BasePlugin[_EnabledPluginConfig]):
+    pass
+
+
 class ThemePlugin(BasePlugin[_FakePluginConfig]):
     pass
 
@@ -1854,18 +1953,21 @@ class FakeEntryPoint:
         return self.cls
 
 
-@patch(
+@mock.patch(
     'mkdocs.plugins.entry_points',
-    return_value=[
-        FakeEntryPoint('sample', FakePlugin),
-        FakeEntryPoint('sample2', FakePlugin2),
-        FakeEntryPoint('readthedocs/sub_plugin', ThemePlugin),
-        FakeEntryPoint('overridden', FakePlugin2),
-        FakeEntryPoint('readthedocs/overridden', ThemePlugin2),
-    ],
+    mock.Mock(
+        return_value=[
+            FakeEntryPoint('sample', FakePlugin),
+            FakeEntryPoint('sample2', FakePlugin2),
+            FakeEntryPoint('sample-e', EnabledPlugin),
+            FakeEntryPoint('readthedocs/sub_plugin', ThemePlugin),
+            FakeEntryPoint('overridden', FakePlugin2),
+            FakeEntryPoint('readthedocs/overridden', ThemePlugin2),
+        ]
+    ),
 )
 class PluginsTest(TestCase):
-    def test_plugin_config_without_options(self, mock_class) -> None:
+    def test_plugin_config_without_options(self) -> None:
         class Schema(Config):
             plugins = c.Plugins()
 
@@ -1889,7 +1991,7 @@ class PluginsTest(TestCase):
         }
         self.assertEqual(plugin.config, expected)
 
-    def test_plugin_config_with_options(self, mock_class) -> None:
+    def test_plugin_config_with_options(self) -> None:
         class Schema(Config):
             plugins = c.Plugins()
 
@@ -1915,7 +2017,7 @@ class PluginsTest(TestCase):
         }
         self.assertEqual(conf.plugins['sample'].config, expected)
 
-    def test_plugin_config_as_dict(self, mock_class) -> None:
+    def test_plugin_config_as_dict(self) -> None:
         class Schema(Config):
             plugins = c.Plugins()
 
@@ -1939,7 +2041,7 @@ class PluginsTest(TestCase):
         }
         self.assertEqual(conf.plugins['sample'].config, expected)
 
-    def test_plugin_config_with_explicit_theme_namespace(self, mock_class) -> None:
+    def test_plugin_config_with_explicit_theme_namespace(self) -> None:
         class Schema(Config):
             theme = c.Theme(default='mkdocs')
             plugins = c.Plugins(theme_key='theme')
@@ -1956,7 +2058,7 @@ class PluginsTest(TestCase):
         self.assertEqual(set(conf.plugins), {'readthedocs/sub_plugin'})
         self.assertIsInstance(conf.plugins['readthedocs/sub_plugin'], ThemePlugin)
 
-    def test_plugin_config_with_deduced_theme_namespace(self, mock_class) -> None:
+    def test_plugin_config_with_deduced_theme_namespace(self) -> None:
         class Schema(Config):
             theme = c.Theme(default='mkdocs')
             plugins = c.Plugins(theme_key='theme')
@@ -1971,7 +2073,7 @@ class PluginsTest(TestCase):
         with self.expect_error(plugins='The "sub_plugin" plugin is not installed'):
             self.get_config(Schema, cfg)
 
-    def test_plugin_config_with_deduced_theme_namespace_overridden(self, mock_class) -> None:
+    def test_plugin_config_with_deduced_theme_namespace_overridden(self) -> None:
         class Schema(Config):
             theme = c.Theme(default='mkdocs')
             plugins = c.Plugins(theme_key='theme')
@@ -1988,7 +2090,7 @@ class PluginsTest(TestCase):
         self.assertEqual(set(conf.plugins), {'overridden'})
         self.assertIsInstance(conf.plugins['overridden'], FakePlugin2)
 
-    def test_plugin_config_with_explicit_empty_namespace(self, mock_class) -> None:
+    def test_plugin_config_with_explicit_empty_namespace(self) -> None:
         class Schema(Config):
             theme = c.Theme(default='mkdocs')
             plugins = c.Plugins(theme_key='theme')
@@ -2005,7 +2107,50 @@ class PluginsTest(TestCase):
         self.assertEqual(set(conf.plugins), {'overridden'})
         self.assertIsInstance(conf.plugins['overridden'], FakePlugin2)
 
-    def test_plugin_config_with_multiple_instances(self, mock_class) -> None:
+    def test_plugin_config_enabled_for_any_plugin(self) -> None:
+        class Schema(Config):
+            theme = c.Theme(default='mkdocs')
+            plugins = c.Plugins(theme_key='theme')
+
+        cfg = {'theme': 'readthedocs', 'plugins': {'sample': {'enabled': False, 'bar': 3}}}
+        conf = self.get_config(Schema, cfg)
+        self.assertEqual(set(conf.plugins), set())
+
+        cfg = {'theme': 'readthedocs', 'plugins': {'sample': {'enabled': True, 'bar': 3}}}
+        conf = self.get_config(Schema, cfg)
+        self.assertEqual(set(conf.plugins), {'sample'})
+        self.assertEqual(conf.plugins['sample'].config.bar, 3)
+
+        cfg = {'theme': 'readthedocs', 'plugins': {'sample': {'enabled': 5}}}
+        with self.expect_error(
+            plugins="Plugin 'sample' option 'enabled': Expected boolean but received: <class 'int'>"
+        ):
+            self.get_config(Schema, cfg)
+
+    def test_plugin_config_enabled_for_plugin_with_setting(self) -> None:
+        class Schema(Config):
+            theme = c.Theme(default='mkdocs')
+            plugins = c.Plugins(theme_key='theme')
+
+        cfg = {'theme': 'readthedocs', 'plugins': {'sample-e': {'enabled': False, 'bar': 3}}}
+        conf = self.get_config(Schema, cfg)
+        self.assertEqual(set(conf.plugins), {'sample-e'})
+        self.assertEqual(conf.plugins['sample-e'].config.enabled, False)
+        self.assertEqual(conf.plugins['sample-e'].config.bar, 3)
+
+        cfg = {'theme': 'readthedocs', 'plugins': {'sample-e': {'enabled': True, 'bar': 3}}}
+        conf = self.get_config(Schema, cfg)
+        self.assertEqual(set(conf.plugins), {'sample-e'})
+        self.assertEqual(conf.plugins['sample-e'].config.enabled, True)
+        self.assertEqual(conf.plugins['sample-e'].config.bar, 3)
+
+        cfg = {'theme': 'readthedocs', 'plugins': {'sample-e': {'enabled': 5}}}
+        with self.expect_error(
+            plugins="Plugin 'sample-e' option 'enabled': Expected type: <class 'bool'> but received: <class 'int'>"
+        ):
+            self.get_config(Schema, cfg)
+
+    def test_plugin_config_with_multiple_instances(self) -> None:
         class Schema(Config):
             theme = c.Theme(default='mkdocs')
             plugins = c.Plugins(theme_key='theme')
@@ -2025,7 +2170,7 @@ class PluginsTest(TestCase):
         self.assertEqual(conf.plugins['sample2'].config['bar'], 42)
         self.assertEqual(conf.plugins['sample2 #2'].config['bar'], 0)
 
-    def test_plugin_config_with_multiple_instances_and_warning(self, mock_class) -> None:
+    def test_plugin_config_with_multiple_instances_and_warning(self) -> None:
         class Schema(Config):
             theme = c.Theme(default='mkdocs')
             plugins = c.Plugins(theme_key='theme')
@@ -2056,7 +2201,7 @@ class PluginsTest(TestCase):
                 {'readthedocs/sub_plugin', 'readthedocs/sub_plugin #2', 'sample2', 'sample2 #2'},
             )
 
-    def test_plugin_config_empty_list_with_empty_default(self, mock_class) -> None:
+    def test_plugin_config_empty_list_with_empty_default(self) -> None:
         class Schema(Config):
             plugins = c.Plugins(default=[])
 
@@ -2066,7 +2211,7 @@ class PluginsTest(TestCase):
         self.assertIsInstance(conf.plugins, PluginCollection)
         self.assertEqual(len(conf.plugins), 0)
 
-    def test_plugin_config_empty_list_with_default(self, mock_class) -> None:
+    def test_plugin_config_empty_list_with_default(self) -> None:
         class Schema(Config):
             plugins = c.Plugins(default=['sample'])
 
@@ -2077,7 +2222,7 @@ class PluginsTest(TestCase):
         self.assertIsInstance(conf.plugins, PluginCollection)
         self.assertEqual(len(conf.plugins), 0)
 
-    def test_plugin_config_none_with_empty_default(self, mock_class) -> None:
+    def test_plugin_config_none_with_empty_default(self) -> None:
         class Schema(Config):
             plugins = c.Plugins(default=[])
 
@@ -2087,7 +2232,7 @@ class PluginsTest(TestCase):
         self.assertIsInstance(conf.plugins, PluginCollection)
         self.assertEqual(len(conf.plugins), 0)
 
-    def test_plugin_config_none_with_default(self, mock_class) -> None:
+    def test_plugin_config_none_with_default(self) -> None:
         class Schema(Config):
             plugins = c.Plugins(default=['sample'])
 
@@ -2105,7 +2250,7 @@ class PluginsTest(TestCase):
         }
         self.assertEqual(conf.plugins['sample'].config, expected)
 
-    def test_plugin_config_uninstalled(self, mock_class) -> None:
+    def test_plugin_config_uninstalled(self) -> None:
         class Schema(Config):
             plugins = c.Plugins()
 
@@ -2113,7 +2258,7 @@ class PluginsTest(TestCase):
         with self.expect_error(plugins='The "uninstalled" plugin is not installed'):
             self.get_config(Schema, cfg)
 
-    def test_plugin_config_not_list(self, mock_class) -> None:
+    def test_plugin_config_not_list(self) -> None:
         class Schema(Config):
             plugins = c.Plugins()
 
@@ -2121,7 +2266,7 @@ class PluginsTest(TestCase):
         with self.expect_error(plugins="Invalid Plugins configuration. Expected a list or dict."):
             self.get_config(Schema, cfg)
 
-    def test_plugin_config_multivalue_dict(self, mock_class) -> None:
+    def test_plugin_config_multivalue_dict(self) -> None:
         class Schema(Config):
             plugins = c.Plugins()
 
@@ -2147,7 +2292,7 @@ class PluginsTest(TestCase):
         with self.expect_error(plugins="Invalid Plugins configuration"):
             self.get_config(Schema, cfg)
 
-    def test_plugin_config_not_string_or_dict(self, mock_class) -> None:
+    def test_plugin_config_not_string_or_dict(self) -> None:
         class Schema(Config):
             plugins = c.Plugins()
 
@@ -2157,7 +2302,7 @@ class PluginsTest(TestCase):
         with self.expect_error(plugins="'('not a string or dict',)' is not a valid plugin name."):
             self.get_config(Schema, cfg)
 
-    def test_plugin_config_options_not_dict(self, mock_class) -> None:
+    def test_plugin_config_options_not_dict(self) -> None:
         class Schema(Config):
             plugins = c.Plugins()
 
@@ -2167,7 +2312,7 @@ class PluginsTest(TestCase):
         with self.expect_error(plugins="Invalid config options for the 'sample' plugin."):
             self.get_config(Schema, cfg)
 
-    def test_plugin_config_sub_error(self, mock_class) -> None:
+    def test_plugin_config_sub_error(self) -> None:
         class Schema(Config):
             plugins = c.Plugins(default=['sample'])
 
@@ -2181,7 +2326,7 @@ class PluginsTest(TestCase):
         ):
             self.get_config(Schema, cfg)
 
-    def test_plugin_config_sub_warning(self, mock_class) -> None:
+    def test_plugin_config_sub_warning(self) -> None:
         class Schema(Config):
             plugins = c.Plugins()
 

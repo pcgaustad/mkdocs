@@ -52,39 +52,33 @@ class ConfigBaseTests(unittest.TestCase):
 
         cfg = base.load_config(config_file=config_file.name)
         self.assertTrue(isinstance(cfg, defaults.MkDocsConfig))
-        self.assertEqual(cfg['site_name'], 'MkDocs Test')
+        self.assertEqual(cfg.site_name, 'MkDocs Test')
 
     @tempdir()
     def test_load_default_file(self, temp_dir):
-        """
-        test that `mkdocs.yml` will be loaded when '--config' is not set.
-        """
+        """Test that `mkdocs.yml` will be loaded when '--config' is not set."""
         with open(os.path.join(temp_dir, 'mkdocs.yml'), 'w') as config_file:
             config_file.write("site_name: MkDocs Test\n")
         os.mkdir(os.path.join(temp_dir, 'docs'))
         with change_dir(temp_dir):
             cfg = base.load_config(config_file=None)
             self.assertTrue(isinstance(cfg, defaults.MkDocsConfig))
-            self.assertEqual(cfg['site_name'], 'MkDocs Test')
+            self.assertEqual(cfg.site_name, 'MkDocs Test')
 
-    @tempdir
+    @tempdir()
     def test_load_default_file_with_yaml(self, temp_dir):
-        """
-        test that `mkdocs.yml` will be loaded when '--config' is not set.
-        """
+        """Test that `mkdocs.yml` will be loaded when '--config' is not set."""
         with open(os.path.join(temp_dir, 'mkdocs.yaml'), 'w') as config_file:
             config_file.write("site_name: MkDocs Test\n")
         os.mkdir(os.path.join(temp_dir, 'docs'))
         with change_dir(temp_dir):
             cfg = base.load_config(config_file=None)
             self.assertTrue(isinstance(cfg, defaults.MkDocsConfig))
-            self.assertEqual(cfg['site_name'], 'MkDocs Test')
+            self.assertEqual(cfg.site_name, 'MkDocs Test')
 
     @tempdir()
     def test_load_default_file_prefer_yml(self, temp_dir):
-        """
-        test that `mkdocs.yml` will be loaded when '--config' is not set.
-        """
+        """Test that `mkdocs.yml` will be loaded when '--config' is not set."""
         with open(os.path.join(temp_dir, 'mkdocs.yml'), 'w') as config_file1:
             config_file1.write("site_name: MkDocs Test1\n")
         with open(os.path.join(temp_dir, 'mkdocs.yaml'), 'w') as config_file2:
@@ -94,7 +88,7 @@ class ConfigBaseTests(unittest.TestCase):
         with change_dir(temp_dir):
             cfg = base.load_config(config_file=None)
             self.assertTrue(isinstance(cfg, defaults.MkDocsConfig))
-            self.assertEqual(cfg['site_name'], 'MkDocs Test1')
+            self.assertEqual(cfg.site_name, 'MkDocs Test1')
 
     def test_load_from_missing_file(self):
         with self.assertRaisesRegex(
@@ -104,9 +98,7 @@ class ConfigBaseTests(unittest.TestCase):
 
     @tempdir()
     def test_load_from_open_file(self, temp_path):
-        """
-        `load_config` can accept an open file descriptor.
-        """
+        """`load_config` can accept an open file descriptor."""
         config_fname = os.path.join(temp_path, 'mkdocs.yml')
         config_file = open(config_fname, 'w+')
         config_file.write("site_name: MkDocs Test\n")
@@ -115,7 +107,7 @@ class ConfigBaseTests(unittest.TestCase):
 
         cfg = base.load_config(config_file=config_file)
         self.assertTrue(isinstance(cfg, defaults.MkDocsConfig))
-        self.assertEqual(cfg['site_name'], 'MkDocs Test')
+        self.assertEqual(cfg.site_name, 'MkDocs Test')
         # load_config will always close the file
         self.assertTrue(config_file.closed)
 
@@ -131,13 +123,11 @@ class ConfigBaseTests(unittest.TestCase):
 
         cfg = base.load_config(config_file=config_file)
         self.assertTrue(isinstance(cfg, defaults.MkDocsConfig))
-        self.assertEqual(cfg['site_name'], 'MkDocs Test')
+        self.assertEqual(cfg.site_name, 'MkDocs Test')
 
-    @tempdir
+    @tempdir()
     def test_load_missing_required(self, temp_dir):
-        """
-        `site_name` is a required setting.
-        """
+        """`site_name` is a required setting."""
         with open(os.path.join(temp_dir, 'mkdocs.yml'), 'w') as config_file:
             config_file.write("site_dir: output\nsite_url: https://www.mkdocs.org\n")
         os.mkdir(os.path.join(temp_dir, 'docs'))
@@ -265,8 +255,8 @@ class ConfigBaseTests(unittest.TestCase):
 
         cfg = base.load_config(config_file=config_file)
         self.assertTrue(isinstance(cfg, defaults.MkDocsConfig))
-        self.assertEqual(cfg['site_name'], 'MkDocs Test')
-        self.assertEqual(cfg['docs_dir'], docs_dir)
+        self.assertEqual(cfg.site_name, 'MkDocs Test')
+        self.assertEqual(cfg.docs_dir, docs_dir)
         self.assertEqual(cfg.config_file_path, config_fname)
         self.assertIsInstance(cfg.config_file_path, str)
 

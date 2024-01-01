@@ -213,7 +213,10 @@ h1:hover .headerlink, h2:hover .headerlink, h3:hover .headerlink, h4:hover .head
     display:inline-block;
 }
 
-
+blockquote {
+    padding-left: 10px;
+    border-left: 4px solid #e6e6e6;
+}
 
 .admonition, details {
     padding: 15px;
@@ -223,7 +226,7 @@ h1:hover .headerlink, h2:hover .headerlink, h3:hover .headerlink, h4:hover .head
     text-align: left;
 }
 
-.admonition.note, details.note { /* csslint allow: adjoining-classes */
+.admonition.note, details.note, .admonition.info, details.info { /* csslint allow: adjoining-classes */
     color: #2e6b89;
     background-color: #e2f0f7;
     border-color: #bce8f1;

@@ -1,23 +1,24 @@
 from __future__ import annotations
 
 import copy
+import enum
 import logging
-import os
 import posixpath
 import warnings
-from typing import TYPE_CHECKING, Any, Callable, MutableMapping
+from typing import TYPE_CHECKING, Any, Callable, Iterator, MutableMapping, Sequence
 from urllib.parse import unquote as urlunquote
 from urllib.parse import urljoin, urlsplit, urlunsplit
 
 import markdown
-import markdown.extensions
+import markdown.htmlparser  # type: ignore
 import markdown.postprocessors
 import markdown.treeprocessors
 from markdown.util import AMP_SUBSTITUTE
 
+from mkdocs import utils
 from mkdocs.structure import StructureItem
 from mkdocs.structure.toc import get_toc
-from mkdocs.utils import get_build_date, get_markdown_title, meta, weak_property
+from mkdocs.utils import _removesuffix, get_build_date, get_markdown_title, meta, weak_property
 
 if TYPE_CHECKING:
     from xml.etree import ElementTree as etree
@@ -25,12 +26,6 @@ if TYPE_CHECKING:
     from mkdocs.config.defaults import MkDocsConfig
     from mkdocs.structure.files import File, Files
     from mkdocs.structure.toc import TableOfContents
-
-_unescape: Callable[[str], str]
-try:
-    _unescape = markdown.treeprocessors.UnescapeTreeprocessor().unescape  # type: ignore
-except AttributeError:
-    _unescape = markdown.postprocessors.UnescapePostprocessor().run
 
 
 log = logging.getLogger(__name__)
@@ -49,7 +44,7 @@ class Page(StructureItem):
         self.next_page = None
         self.active = False
 
-        self.update_date = get_build_date()
+        self.update_date: str = get_build_date()
 
         self._set_canonical_url(config.get('site_url', None))
         self._set_edit_url(
@@ -71,15 +66,18 @@ class Page(StructureItem):
         )
 
     def __repr__(self):
+        name = self.__class__.__name__
         title = f"{self.title!r}" if self.title is not None else '[blank]'
         url = self.abs_url or self.file.url
-        return f"Page(title={title}, url={url!r})"
+        return f"{name}(title={title}, url={url!r})"
 
     markdown: str | None
     """The original Markdown content from the file."""
 
     content: str | None
-    """The rendered Markdown as HTML, this is the contents of the documentation."""
+    """The rendered Markdown as HTML, this is the contents of the documentation.
+
+    Populated after `.render()`."""
 
     toc: TableOfContents
     """An iterable object representing the Table of contents for a page. Each item in
@@ -257,35 +255,98 @@ class Page(StructureItem):
         return title
 
     def render(self, config: MkDocsConfig, files: Files) -> None:
-        """
-        Convert the Markdown source file to HTML as per the config.
-        """
+        """Convert the Markdown source file to HTML as per the config."""
         if self.markdown is None:
             raise RuntimeError("`markdown` field hasn't been set (via `read_source`)")
 
-        relative_path_extension = _RelativePathExtension(self.file, files)
-        extract_title_extension = _ExtractTitleExtension()
         md = markdown.Markdown(
-            extensions=[
-                relative_path_extension,
-                extract_title_extension,
-                *config['markdown_extensions'],
-            ],
+            extensions=config['markdown_extensions'],
             extension_configs=config['mdx_configs'] or {},
         )
+
+        raw_html_ext = _RawHTMLPreprocessor()
+        raw_html_ext._register(md)
+
+        extract_anchors_ext = _ExtractAnchorsTreeprocessor(self.file, files, config)
+        extract_anchors_ext._register(md)
+
+        relative_path_ext = _RelativePathTreeprocessor(self.file, files, config)
+        relative_path_ext._register(md)
+
+        extract_title_ext = _ExtractTitleTreeprocessor()
+        extract_title_ext._register(md)
+
         self.content = md.convert(self.markdown)
         self.toc = get_toc(getattr(md, 'toc_tokens', []))
-        self._title_from_render = extract_title_extension.title
+        self._title_from_render = extract_title_ext.title
+        self.present_anchor_ids = (
+            extract_anchors_ext.present_anchor_ids | raw_html_ext.present_anchor_ids
+        )
+        if log.getEffectiveLevel() > logging.DEBUG:
+            self.links_to_anchors = relative_path_ext.links_to_anchors
+
+    present_anchor_ids: set[str] | None = None
+    """Anchor IDs that this page contains (can be linked to in this page)."""
+
+    links_to_anchors: dict[File, dict[str, str]] | None = None
+    """Links to anchors in other files that this page contains.
+
+    The structure is: `{file_that_is_linked_to: {'anchor': 'original_link/to/some_file.md#anchor'}}`.
+    Populated after `.render()`. Populated only if `validation: {anchors: info}` (or greater) is set.
+    """
+
+    def validate_anchor_links(self, *, files: Files, log_level: int) -> None:
+        if not self.links_to_anchors:
+            return
+        for to_file, links in self.links_to_anchors.items():
+            for anchor, original_link in links.items():
+                page = to_file.page
+                if page is None:
+                    continue
+                if page.present_anchor_ids is None:  # Page was somehow not rendered.
+                    continue
+                if anchor in page.present_anchor_ids:
+                    continue
+                context = ""
+                if to_file == self.file:
+                    problem = "there is no such anchor on this page"
+                    if anchor.startswith('fnref:'):
+                        context = " This seems to be a footnote that is never referenced."
+                else:
+                    problem = f"the doc '{to_file.src_uri}' does not contain an anchor '#{anchor}'"
+                log.log(
+                    log_level,
+                    f"Doc file '{self.file.src_uri}' contains a link '{original_link}', but {problem}.{context}",
+                )
+
+
+class _ExtractAnchorsTreeprocessor(markdown.treeprocessors.Treeprocessor):
+    def __init__(self, file: File, files: Files, config: MkDocsConfig) -> None:
+        self.present_anchor_ids: set[str] = set()
+
+    def run(self, root: etree.Element) -> None:
+        add = self.present_anchor_ids.add
+        for element in root.iter():
+            if anchor := element.get('id'):
+                add(anchor)
+            if element.tag == 'a':
+                if anchor := element.get('name'):
+                    add(anchor)
+
+    def _register(self, md: markdown.Markdown) -> None:
+        md.treeprocessors.register(self, "mkdocs_extract_anchors", priority=5)  # Same as 'toc'.
 
 
 class _RelativePathTreeprocessor(markdown.treeprocessors.Treeprocessor):
-    def __init__(self, file: File, files: Files) -> None:
+    def __init__(self, file: File, files: Files, config: MkDocsConfig) -> None:
         self.file = file
         self.files = files
+        self.config = config
+        self.links_to_anchors: dict[File, dict[str, str]] = {}
 
     def run(self, root: etree.Element) -> etree.Element:
         """
-        Update urls on anchors and images to make them relative
+        Update urls on anchors and images to make them relative.
 
         Iterates through the full document tree looking for specific
         tags and then makes them relative based on the site navigation
@@ -305,84 +366,207 @@ class _RelativePathTreeprocessor(markdown.treeprocessors.Treeprocessor):
 
         return root
 
-    def path_to_url(self, url: str) -> str:
-        scheme, netloc, path, query, fragment = urlsplit(url)
+    @classmethod
+    def _target_uri(cls, src_path: str, dest_path: str) -> str:
+        return posixpath.normpath(
+            posixpath.join(posixpath.dirname(src_path), dest_path).lstrip('/')
+        )
 
+    @classmethod
+    def _possible_target_uris(
+        cls, file: File, path: str, use_directory_urls: bool, suggest_absolute: bool = False
+    ) -> Iterator[str]:
+        """First yields the resolved file uri for the link, then proceeds to yield guesses for possible mistakes."""
+        target_uri = cls._target_uri(file.src_uri, path)
+        yield target_uri
+
+        if posixpath.normpath(path) == '.':
+            # Explicitly link to current file.
+            yield file.src_uri
+            return
+        tried = {target_uri}
+
+        prefixes = [target_uri, cls._target_uri(file.url, path)]
+        if prefixes[0] == prefixes[1]:
+            prefixes.pop()
+
+        suffixes: list[Callable[[str], str]] = []
+        if use_directory_urls:
+            suffixes.append(lambda p: p)
+        if not posixpath.splitext(target_uri)[-1]:
+            suffixes.append(lambda p: posixpath.join(p, 'index.md'))
+            suffixes.append(lambda p: posixpath.join(p, 'README.md'))
         if (
-            scheme
-            or netloc
-            or not path
-            or url.startswith('/')
-            or url.startswith('\\')
-            or AMP_SUBSTITUTE in url
-            or '.' not in os.path.split(path)[-1]
+            not target_uri.endswith('.')
+            and not path.endswith('.md')
+            and (use_directory_urls or not path.endswith('/'))
         ):
-            # Ignore URLs unless they are a relative link to a source file.
-            # AMP_SUBSTITUTE is used internally by Markdown only for email.
-            # No '.' in the last part of a path indicates path does not point to a file.
+            suffixes.append(lambda p: _removesuffix(p, '.html') + '.md')
+
+        for pref in prefixes:
+            for suf in suffixes:
+                guess = posixpath.normpath(suf(pref))
+                if guess not in tried and not guess.startswith('../'):
+                    yield guess
+                    tried.add(guess)
+
+    def path_to_url(self, url: str) -> str:
+        scheme, netloc, path, query, anchor = urlsplit(url)
+
+        absolute_link = None
+        warning_level, warning = 0, ''
+
+        # Ignore URLs unless they are a relative link to a source file.
+        if scheme or netloc:  # External link.
+            return url
+        elif url.startswith(('/', '\\')):  # Absolute link.
+            absolute_link = self.config.validation.links.absolute_links
+            if absolute_link is not _AbsoluteLinksValidationValue.RELATIVE_TO_DOCS:
+                warning_level = absolute_link
+                warning = f"Doc file '{self.file.src_uri}' contains an absolute link '{url}', it was left as is."
+        elif AMP_SUBSTITUTE in url:  # AMP_SUBSTITUTE is used internally by Markdown only for email.
+            return url
+        elif not path:  # Self-link containing only query or anchor.
+            if anchor:
+                # Register that the page links to itself with an anchor.
+                self.links_to_anchors.setdefault(self.file, {}).setdefault(anchor, url)
             return url
 
+        path = urlunquote(path)
         # Determine the filepath of the target.
-        target_uri = posixpath.join(posixpath.dirname(self.file.src_uri), urlunquote(path))
-        target_uri = posixpath.normpath(target_uri).lstrip('/')
+        possible_target_uris = self._possible_target_uris(
+            self.file, path, self.config.use_directory_urls
+        )
 
-        # Validate that the target exists in files collection.
-        target_file = self.files.get_file_from_path(target_uri)
-        if target_file is None:
-            log.warning(
-                f"Documentation file '{self.file.src_uri}' contains a link to "
-                f"'{target_uri}' which is not found in the documentation files."
-            )
+        if warning:
+            # For absolute path (already has a warning), the primary lookup path should be preserved as a tip option.
+            target_uri = url
+            target_file = None
+        else:
+            # Validate that the target exists in files collection.
+            target_uri = next(possible_target_uris)
+            target_file = self.files.get_file_from_path(target_uri)
+
+        if target_file is None and not warning:
+            # Primary lookup path had no match, definitely produce a warning, just choose which one.
+            if not posixpath.splitext(path)[-1] and absolute_link is None:
+                # No '.' in the last part of a path indicates path does not point to a file.
+                warning_level = self.config.validation.links.unrecognized_links
+                warning = (
+                    f"Doc file '{self.file.src_uri}' contains an unrecognized relative link '{url}', "
+                    f"it was left as is."
+                )
+            else:
+                target = f" '{target_uri}'" if target_uri != url.lstrip('/') else ""
+                warning_level = self.config.validation.links.not_found
+                warning = (
+                    f"Doc file '{self.file.src_uri}' contains a link '{url}', "
+                    f"but the target{target} is not found among documentation files."
+                )
+
+        if warning:
+            if self.file.inclusion.is_excluded():
+                warning_level = min(logging.INFO, warning_level)
+
+            # There was no match, so try to guess what other file could've been intended.
+            if warning_level > logging.DEBUG:
+                suggest_url = ''
+                for path in possible_target_uris:
+                    if self.files.get_file_from_path(path) is not None:
+                        if anchor and path == self.file.src_uri:
+                            path = ''
+                        elif absolute_link is _AbsoluteLinksValidationValue.RELATIVE_TO_DOCS:
+                            path = '/' + path
+                        else:
+                            path = utils.get_relative_url(path, self.file.src_uri)
+                        suggest_url = urlunsplit(('', '', path, query, anchor))
+                        break
+                else:
+                    if '@' in url and '.' in url and '/' not in url:
+                        suggest_url = f'mailto:{url}'
+                if suggest_url:
+                    warning += f" Did you mean '{suggest_url}'?"
+            log.log(warning_level, warning)
             return url
+
+        assert target_uri is not None
+        assert target_file is not None
+
+        if anchor:
+            # Register that this page links to the target file with an anchor.
+            self.links_to_anchors.setdefault(target_file, {}).setdefault(anchor, url)
+
         if target_file.inclusion.is_excluded():
-            log.info(
-                f"Documentation file '{self.file.src_uri}' contains a link to "
+            if self.file.inclusion.is_excluded():
+                warning_level = logging.DEBUG
+            else:
+                warning_level = min(logging.INFO, self.config.validation.links.not_found)
+            warning = (
+                f"Doc file '{self.file.src_uri}' contains a link to "
                 f"'{target_uri}' which is excluded from the built site."
             )
-        path = target_file.url_relative_to(self.file)
-        components = (scheme, netloc, path, query, fragment)
-        return urlunsplit(components)
+            log.log(warning_level, warning)
+        path = utils.get_relative_url(target_file.url, self.file.url)
+        return urlunsplit(('', '', path, query, anchor))
+
+    def _register(self, md: markdown.Markdown) -> None:
+        md.treeprocessors.register(self, "relpath", 0)
 
 
-class _RelativePathExtension(markdown.extensions.Extension):
-    """
-    The Extension class is what we pass to markdown, it then
-    registers the Treeprocessor.
-    """
-
-    def __init__(self, file: File, files: Files) -> None:
-        self.file = file
-        self.files = files
-
-    def extendMarkdown(self, md: markdown.Markdown) -> None:
-        relpath = _RelativePathTreeprocessor(self.file, self.files)
-        md.treeprocessors.register(relpath, "relpath", 0)
-
-
-class _ExtractTitleExtension(markdown.extensions.Extension):
+class _RawHTMLPreprocessor(markdown.preprocessors.Preprocessor):
     def __init__(self) -> None:
-        self.title: str | None = None
+        super().__init__()
+        self.present_anchor_ids: set[str] = set()
 
-    def extendMarkdown(self, md: markdown.Markdown) -> None:
-        md.treeprocessors.register(
-            _ExtractTitleTreeprocessor(self),
-            "mkdocs_extract_title",
-            priority=1,  # Close to the end.
+    def run(self, lines: list[str]) -> list[str]:
+        parser = _HTMLHandler()
+        parser.feed('\n'.join(lines))
+        parser.close()
+        self.present_anchor_ids = parser.present_anchor_ids
+        return lines
+
+    def _register(self, md: markdown.Markdown) -> None:
+        md.preprocessors.register(
+            self, "mkdocs_raw_html", priority=21  # Right before 'html_block'.
         )
 
 
+class _HTMLHandler(markdown.htmlparser.htmlparser.HTMLParser):  # type: ignore[name-defined]
+    def __init__(self) -> None:
+        super().__init__()
+        self.present_anchor_ids: set[str] = set()
+
+    def handle_starttag(self, tag: str, attrs: Sequence[tuple[str, str]]) -> None:
+        for k, v in attrs:
+            if k == 'id' or (k == 'name' and tag == 'a'):
+                self.present_anchor_ids.add(v)
+        return super().handle_starttag(tag, attrs)
+
+
 class _ExtractTitleTreeprocessor(markdown.treeprocessors.Treeprocessor):
-    def __init__(self, ext: _ExtractTitleExtension) -> None:
-        self.ext = ext
+    title: str | None = None
+    postprocessors: Sequence[markdown.postprocessors.Postprocessor] = ()
 
     def run(self, root: etree.Element) -> etree.Element:
         for el in root:
             if el.tag == 'h1':
                 # Drop anchorlink from the element, if present.
-                if len(el) > 0 and el[-1].tag == 'a' and not (el.tail or '').strip():
+                if len(el) > 0 and el[-1].tag == 'a' and not (el[-1].tail or '').strip():
                     el = copy.copy(el)
                     del el[-1]
                 # Extract the text only, recursively.
-                self.ext.title = _unescape(''.join(el.itertext()))
+                title = ''.join(el.itertext())
+                # Unescape per Markdown implementation details.
+                for pp in self.postprocessors:
+                    title = pp.run(title)
+                self.title = title
             break
         return root
+
+    def _register(self, md: markdown.Markdown) -> None:
+        self.postprocessors = tuple(md.postprocessors)
+        md.treeprocessors.register(self, "mkdocs_extract_title", priority=-1)  # After the end.
+
+
+class _AbsoluteLinksValidationValue(enum.IntEnum):
+    RELATIVE_TO_DOCS = -1

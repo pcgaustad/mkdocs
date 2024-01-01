@@ -38,7 +38,7 @@ are working from a properly configured development environment.
 Make sure translation requirements are installed in your environment:
 
 ```bash
-pip install mkdocs[i18n]
+pip install 'mkdocs[i18n]'
 ```
 
 [babel]: https://babel.pocoo.org/en/latest/cmdline.html
@@ -196,8 +196,8 @@ and/or updated locale:
 
 ```yaml
 theme:
-    name: mkdocs
-    locale: es
+  name: mkdocs
+  locale: es
 ```
 
 Finally, run `mkdocs serve` to check out your new localized version of the theme.

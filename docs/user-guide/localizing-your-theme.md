@@ -17,7 +17,7 @@ For theme localization to work, you must use a theme which supports it and
 enable `i18n` (internationalization) support by installing `mkdocs[i18n]`:
 
 ```bash
-pip install mkdocs[i18n]
+pip install 'mkdocs[i18n]'
 ```
 
 ## Supported locales
@@ -47,9 +47,9 @@ For example, to build the `mkdocs` theme in French you would use the following
 in your `mkdocs.yml` configuration file:
 
 ```yaml
- theme:
-     name: mkdocs
-     locale: fr
+theme:
+  name: mkdocs
+  locale: fr
 ```
 
 ## Contributing theme translations

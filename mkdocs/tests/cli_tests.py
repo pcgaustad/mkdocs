@@ -21,7 +21,8 @@ class CLITests(unittest.TestCase):
         self.assertEqual(result.exit_code, 0)
         mock_serve.assert_called_once_with(
             dev_addr=None,
-            livereload='livereload',
+            open_in_browser=False,
+            livereload=True,
             build_type=None,
             config_file=None,
             strict=None,
@@ -53,7 +54,8 @@ class CLITests(unittest.TestCase):
         self.assertEqual(result.exit_code, 0)
         mock_serve.assert_called_once_with(
             dev_addr='0.0.0.0:80',
-            livereload='livereload',
+            open_in_browser=False,
+            livereload=True,
             build_type=None,
             config_file=None,
             strict=None,
@@ -70,7 +72,8 @@ class CLITests(unittest.TestCase):
         self.assertEqual(result.exit_code, 0)
         mock_serve.assert_called_once_with(
             dev_addr=None,
-            livereload='livereload',
+            open_in_browser=False,
+            livereload=True,
             build_type=None,
             config_file=None,
             strict=True,
@@ -89,7 +92,8 @@ class CLITests(unittest.TestCase):
         self.assertEqual(result.exit_code, 0)
         mock_serve.assert_called_once_with(
             dev_addr=None,
-            livereload='livereload',
+            open_in_browser=False,
+            livereload=True,
             build_type=None,
             config_file=None,
             strict=None,
@@ -108,7 +112,8 @@ class CLITests(unittest.TestCase):
         self.assertEqual(result.exit_code, 0)
         mock_serve.assert_called_once_with(
             dev_addr=None,
-            livereload='livereload',
+            open_in_browser=False,
+            livereload=True,
             build_type=None,
             config_file=None,
             strict=None,
@@ -127,7 +132,8 @@ class CLITests(unittest.TestCase):
         self.assertEqual(result.exit_code, 0)
         mock_serve.assert_called_once_with(
             dev_addr=None,
-            livereload='livereload',
+            open_in_browser=False,
+            livereload=True,
             build_type=None,
             config_file=None,
             strict=None,
@@ -144,7 +150,8 @@ class CLITests(unittest.TestCase):
         self.assertEqual(result.exit_code, 0)
         mock_serve.assert_called_once_with(
             dev_addr=None,
-            livereload='livereload',
+            open_in_browser=False,
+            livereload=True,
             build_type=None,
             config_file=None,
             strict=None,
@@ -161,7 +168,8 @@ class CLITests(unittest.TestCase):
         self.assertEqual(result.exit_code, 0)
         mock_serve.assert_called_once_with(
             dev_addr=None,
-            livereload='no-livereload',
+            open_in_browser=False,
+            livereload=False,
             build_type=None,
             config_file=None,
             strict=None,
@@ -178,7 +186,8 @@ class CLITests(unittest.TestCase):
         self.assertEqual(result.exit_code, 0)
         mock_serve.assert_called_once_with(
             dev_addr=None,
-            livereload='livereload',
+            open_in_browser=False,
+            livereload=True,
             build_type='dirty',
             config_file=None,
             strict=None,
@@ -195,7 +204,8 @@ class CLITests(unittest.TestCase):
         self.assertEqual(result.exit_code, 0)
         mock_serve.assert_called_once_with(
             dev_addr=None,
-            livereload='livereload',
+            open_in_browser=False,
+            livereload=True,
             build_type=None,
             config_file=None,
             strict=None,
@@ -222,8 +232,8 @@ class CLITests(unittest.TestCase):
             use_directory_urls=None,
             site_dir=None,
         )
-        handler = logging._handlers.get('MkDocsStreamHandler')
-        self.assertEqual(handler.level, logging.INFO)
+        for log_name in 'mkdocs', 'mkdocs.structure.pages', 'mkdocs.plugins.foo':
+            self.assertEqual(logging.getLogger(log_name).getEffectiveLevel(), logging.INFO)
 
     @mock.patch('mkdocs.config.load_config', autospec=True)
     @mock.patch('mkdocs.commands.build.build', autospec=True)
@@ -352,8 +362,8 @@ class CLITests(unittest.TestCase):
 
         self.assertEqual(result.exit_code, 0)
         self.assertEqual(mock_build.call_count, 1)
-        handler = logging._handlers.get('MkDocsStreamHandler')
-        self.assertEqual(handler.level, logging.DEBUG)
+        for log_name in 'mkdocs', 'mkdocs.structure.pages', 'mkdocs.plugins.foo':
+            self.assertEqual(logging.getLogger(log_name).getEffectiveLevel(), logging.DEBUG)
 
     @mock.patch('mkdocs.config.load_config', autospec=True)
     @mock.patch('mkdocs.commands.build.build', autospec=True)
@@ -362,8 +372,8 @@ class CLITests(unittest.TestCase):
 
         self.assertEqual(result.exit_code, 0)
         self.assertEqual(mock_build.call_count, 1)
-        handler = logging._handlers.get('MkDocsStreamHandler')
-        self.assertEqual(handler.level, logging.ERROR)
+        for log_name in 'mkdocs', 'mkdocs.structure.pages', 'mkdocs.plugins.foo':
+            self.assertEqual(logging.getLogger(log_name).getEffectiveLevel(), logging.ERROR)
 
     @mock.patch('mkdocs.commands.new.new', autospec=True)
     def test_new(self, mock_new):

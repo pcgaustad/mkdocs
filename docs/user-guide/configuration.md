@@ -241,8 +241,8 @@ for the site. A minimal navigation configuration could look like this:
 
 ```yaml
 nav:
-    - 'index.md'
-    - 'about.md'
+  - 'index.md'
+  - 'about.md'
 ```
 
 All paths in the navigation configuration must be relative to the
@@ -258,9 +258,9 @@ how MkDocs determines the page title of a document.
 
 ```yaml
 nav:
-    - Introduction: 'index.md'
-    - 'about.md'
-    - 'Issue Tracker': 'https://example.com/'
+  - Introduction: 'index.md'
+  - 'about.md'
+  - 'Issue Tracker': 'https://example.com/'
 ```
 
 In the above example, the first two items point to local files while the third
@@ -274,9 +274,9 @@ the full domain. In that case, you may use an appropriate relative URL.
 site_url: https://example.com/foo/
 
 nav:
-    - Home: '../'
-    - 'User Guide': 'user-guide.md'
-    - 'Bug Tracker': '/bugs/'
+  - Home: '../'
+  - 'User Guide': 'user-guide.md'
+  - 'Bug Tracker': '/bugs/'
 ```
 
 In the above example, two different styles of external links are used. First,
@@ -295,29 +295,30 @@ sub-directories. Index files will always be listed first within a sub-section.
 
 NEW: **New in version 1.5.**
 
+> DANGER: **Changed in version 1.6:**
+>
+> This config no longer applies the "drafts" functionality for `mkdocs serve`. If you have draft documents that you want available in "serve" and not "build", replace `exclude_docs` with the new [`draft_docs`](#draft_docs) config option.
+
 This config defines patterns of files (under [`docs_dir`](#docs_dir)) to not be picked up into the built site.
 
 Example:
 
 ```yaml
 exclude_docs: |
-    api-config.json    # A file with this name anywhere.
-    drafts/            # A "drafts" directory anywhere.
-    /requirements.txt  # Top-level "docs/requirements.txt".
-    *.py               # Any file with this extension anywhere.
-    !/foo/example.py   # But keep this particular file.
+  api-config.json    # A file with this name anywhere.
+  /requirements.txt  # Top-level "docs/requirements.txt".
+  *.py               # Any file with this extension anywhere.
+  !/foo/example.py   # But keep this particular file.
 ```
 
 This follows the [.gitignore pattern format](https://git-scm.com/docs/gitignore#_pattern_format).
-
-Note that `mkdocs serve` does *not* follow this setting and instead displays excluded documents but with a "DRAFT" mark. To prevent this effect, you can run `mkdocs serve --clean`.
 
 The following defaults are always implicitly prepended - to exclude dot-files (and directories) as well as the top-level `templates` directory:
 
 ```yaml
 exclude_docs: |
-    .*
-    /templates/
+  .*
+  /templates/
 ```
 
 So, in order to really start this config fresh, you'd need to specify a negated version of these entries first.
@@ -326,14 +327,33 @@ Otherwise you could for example opt only certain dot-files back into the site:
 
 ```yaml
 exclude_docs: |
-    !.assets  # Don't exclude '.assets' although all other '.*' are excluded
+  !.assets  # Don't exclude '.assets' although all other '.*' are excluded
 ```
+
+### draft_docs
+
+NEW: **New in version 1.6.**
+
+This config defines patterns of files (under [`docs_dir`](#docs_dir)) to be treated as a draft.  Draft files are available during `mkdocs serve` and include a "DRAFT" mark but will not be included in the build. To prevent this effect and make "serve" behave the same as "build", you can run `mkdocs serve --clean`.
+
+Example:
+
+```yaml
+draft_docs: |
+  drafts/               # A "drafts" directory anywhere.
+  _unpublished.md       # A md file ending in _unpublished.md
+  !/foo_unpublished.md  # But keep this particular file.
+```
+
+This follows the [.gitignore pattern format](https://git-scm.com/docs/gitignore#_pattern_format).
 
 ### not_in_nav
 
 NEW: **New in version 1.5.**
 
-NOTE: This option does *not* actually exclude anything from the nav.
+> NEW: **New in version 1.6:**
+>
+> If the [`nav`](#nav) config is not specified at all, pages specified in this config will now be excluded from the inferred navigation.
 
 If you want to include some docs into the site but intentionally exclude them from the nav, normally MkDocs warns about this.
 
@@ -343,16 +363,110 @@ Example:
 
 ```yaml
 nav:
-    - Foo: foo.md
-    - Bar: bar.md
+  - Foo: foo.md
+  - Bar: bar.md
 
 not_in_nav: |
-    /private.md
+  /private.md
 ```
 
 As the previous option, this follows the .gitignore pattern format.
 
 NOTE: Adding a given file to [`exclude_docs`](#exclude_docs) takes precedence over and implies `not_in_nav`.
+
+### validation
+
+NEW: **New in version 1.5.**
+
+Configure the strictness of MkDocs' diagnostic messages when validating links to documents.
+
+This is a tree of configs, and for each one the value can be one of the three: `warn`, `info`, `ignore`. Which cause a logging message of the corresponding severity to be produced. The `warn` level is, of course, intended for use with `mkdocs build --strict` (where it becomes an error), which you can employ in continuous testing.
+
+The config `validation.links.absolute_links` additionally has a special value `relative_to_docs`, for [validation of absolute links](#validation-of-absolute-links).
+
+>? EXAMPLE: **Defaults of this config as of MkDocs 1.6:**
+>
+> ```yaml
+> validation:
+>   nav:
+>     omitted_files: info
+>     not_found: warn
+>     absolute_links: info
+>   links:
+>     not_found: warn
+>     anchors: info
+>     absolute_links: info
+>     unrecognized_links: info
+> ```
+>
+> (Note: you shouldn't copy this whole example, because it only duplicates the defaults. Only individual items that differ should be set.)
+
+The defaults of some of the behaviors already differ from MkDocs 1.4 and below - they were ignored before.
+
+>? EXAMPLE: **Configure MkDocs 1.6 to behave like MkDocs 1.4 and below (reduce strictness):**
+>
+> ```yaml
+> validation:
+>   absolute_links: ignore
+>   unrecognized_links: ignore
+>   anchors: ignore
+> ```
+<!-- -->
+>! EXAMPLE: **Recommended settings for most sites (maximal strictness):**
+>
+> ```yaml
+> validation:
+>   omitted_files: warn
+>   absolute_links: warn  # Or 'relative_to_docs' - new in MkDocs 1.6
+>   unrecognized_links: warn
+>   anchors: warn  # New in MkDocs 1.6
+> ```
+
+Note how in the above examples we omitted the 'nav' and 'links' keys. Here `absolute_links:` means setting both `nav: absolute_links:` and `links: absolute_links:`.
+
+Full list of values and examples of log messages that they can hide or make more prominent:
+
+*   `validation.nav.omitted_files`
+    * > The following pages exist in the docs directory, but are not included in the "nav" configuration: ...
+*   `validation.nav.not_found`
+    * > A reference to 'foo/bar.md' is included in the 'nav' configuration, which is not found in the documentation files.
+    * > A reference to 'foo/bar.md' is included in the 'nav' configuration, but this file is excluded from the built site.
+*   `validation.nav.absolute_links`
+    * > An absolute path to '/foo/bar.html' is included in the 'nav' configuration, which presumably points to an external resource.
+<!-- -->
+*   `validation.links.not_found`
+    * > Doc file 'example.md' contains a link '../foo/bar.md', but the target is not found among documentation files.
+    * > Doc file 'example.md' contains a link to 'foo/bar.md' which is excluded from the built site.
+*   `validation.links.anchors`
+    * > Doc file 'example.md' contains a link '../foo/bar.md#some-heading', but the doc 'foo/bar.md' does not contain an anchor '#some-heading'.
+    * > Doc file 'example.md' contains a link '#some-heading', but there is no such anchor on this page.
+*   `validation.links.absolute_links`
+    * > Doc file 'example.md' contains an absolute link '/foo/bar.html', it was left as is. Did you mean 'foo/bar.md'?
+*   `validation.links.unrecognized_links`
+    * > Doc file 'example.md' contains an unrecognized relative link '../foo/bar/', it was left as is. Did you mean 'foo/bar.md'?
+    * > Doc file 'example.md' contains an unrecognized relative link 'mail\@example.com', it was left as is. Did you mean 'mailto:mail\@example.com'?
+
+#### Validation of absolute links
+
+NEW: **New in version 1.6.**
+
+> Historically, within Markdown, MkDocs only recognized **relative** links that lead to another physical `*.md` document (or media file). This is a good convention to follow because then the source pages are also freely browsable without MkDocs, for example on GitHub. Whereas absolute links were left unmodified (making them often not work as expected) or, more recently, warned against. If you dislike having to always use relative links, now you can opt into absolute links and have them work correctly.
+
+If you set the setting `validation.links.absolute_links` to the new value `relative_to_docs`, all Markdown links starting with `/` will be understood as being relative to the `docs_dir` root. The links will then be validated for correctness according to all the other rules that were already working for relative links in prior versions of MkDocs. For the HTML output, these links will still be turned relative so that the site still works reliably.
+
+So, now any document (e.g. "dir1/foo.md") can link to the document "dir2/bar.md" as `[link](/dir2/bar.md)`, in addition to the previously only correct way `[link](../dir2/bar.md)`.
+
+You have to enable the setting, though. The default is still to just skip the link.
+
+> EXAMPLE: **Settings to recognize absolute links and validate them:**
+>
+> ```yaml
+> validation:
+>   links:
+>     absolute_links: relative_to_docs
+>     anchors: warn
+>     unrecognized_links: warn
+> ```
 
 ## Build directories
 
@@ -368,12 +482,12 @@ An example set of key/value pairs might look something like this:
 
 ```yaml
 theme:
-    name: mkdocs
-    locale: en
-    custom_dir: my_theme_customizations/
-    static_templates:
-        - sitemap.html
-    include_sidebar: false
+  name: mkdocs
+  locale: en
+  custom_dir: my_theme_customizations/
+  static_templates:
+    - sitemap.html
+  include_sidebar: false
 ```
 
 If a set of key/value pairs, the following nested keys can be defined:
@@ -517,7 +631,7 @@ version, you can pass it to the theme like this:
 
 ```yaml
 extra:
-    version: 1.0
+  version: 1.0
 ```
 
 **default**: By default `extra` will be an empty key-value mapping.
@@ -533,8 +647,8 @@ Configuration is a YAML list.
 
 ```yaml
 watch:
-- directory_a
-- directory_b
+  - directory_a
+  - directory_b
 ```
 
 Allows a custom default to be set without the need to pass it through the `-w`/`--watch`
@@ -604,7 +718,7 @@ For example, to enable the [SmartyPants typography extension][smarty], use:
 
 ```yaml
 markdown_extensions:
-    - smarty
+  - smarty
 ```
 
 Some extensions provide configuration options of their own. If you would like to
@@ -617,8 +731,8 @@ For example, to enable permalinks in the (included) `toc` extension, use:
 
 ```yaml
 markdown_extensions:
-    - toc:
-        permalink: true
+  - toc:
+      permalink: true
 ```
 
 Note that a colon (`:`) must follow the extension name (`toc`) and then on a new
@@ -628,9 +742,9 @@ defined on a separate line:
 
 ```yaml
 markdown_extensions:
-    - toc:
-        permalink: true
-        separator: "_"
+  - toc:
+      permalink: true
+      separator: "_"
 ```
 
 Add an additional item to the list for each extension. If you have no
@@ -639,10 +753,10 @@ for that extension:
 
 ```yaml
 markdown_extensions:
-    - smarty
-    - toc:
-        permalink: true
-    - sane_lists
+  - smarty
+  - toc:
+      permalink: true
+  - sane_lists
 ```
 
 > NOTE: **Dynamic config values.**
@@ -656,10 +770,10 @@ Therefore, the last example above could also be defined as follows:
 
 ```yaml
 markdown_extensions:
-    smarty: {}
-    toc:
-        permalink: true
-    sane_lists: {}
+  smarty: {}
+  toc:
+    permalink: true
+  sane_lists: {}
 ```
 
 This alternative syntax is required if you intend to override some options via
@@ -687,7 +801,7 @@ For example:
 
 ```yaml
 hooks:
-    - my_hooks.py
+  - my_hooks.py
 ```
 
 Then the file *my_hooks.py* can contain any [plugin event handlers](../dev-guide/plugins.md#events) (without `self`), e.g.:
@@ -734,41 +848,27 @@ You might have seen this feature in the [mkdocs-simple-hooks plugin](https://git
 A list of plugins (with optional configuration settings) to use when building
 the site. See the [Plugins] documentation for full details.
 
+**default**: `['search']` (the "search" plugin included with MkDocs).
+
 If the `plugins` config setting is defined in the `mkdocs.yml` config file, then
 any defaults (such as `search`) are ignored and you need to explicitly re-enable
 the defaults if you would like to continue using them:
 
 ```yaml
 plugins:
-    - search
-    - your_other_plugin
+  - search
+  - your_other_plugin
 ```
 
 To define options for a given plugin, use a nested set of key/value pairs:
 
 ```yaml
 plugins:
-    - search
-    - your_other_plugin:
-        option1: value
-        option2: other value
+  - search
+  - your_other_plugin:
+      option1: value
+      option2: other value
 ```
-
-In the above examples, each plugin is a list item (starts with a `-`). As an
-alternative, key/value pairs can be used instead. However, in that case an empty
-value must be provided for plugins for which no options are defined. Therefore,
-the last example above could also be defined as follows:
-
-```yaml
-plugins:
-    search: {}
-    your_other_plugin:
-        option1: value
-        option2: other value
-```
-
-This alternative syntax is required if you intend to override some options via
-[inheritance].
 
 To completely disable all plugins, including any defaults, set the `plugins`
 setting to an empty list:
@@ -777,7 +877,38 @@ setting to an empty list:
 plugins: []
 ```
 
-**default**: `['search']` (the "search" plugin included with MkDocs).
+#### `enabled` option
+
+> NEW: **New in MkDocs 1.6.**
+>
+> Each plugin has its own options keys. However MkDocs also ensures that each plugin has the `enabled` boolean option. This can be used to conditionally enable a particular plugin, as in the following example:
+>
+> ```yaml
+> plugins:
+>   - search
+>   - code-validator:
+>       enabled: !ENV [LINT, false]
+> ```
+>
+> See: [Environment variables](#environment-variables)
+
+#### Alternate syntax
+
+In the above examples, each plugin is a list item (starts with a `-`). As an
+alternative, key/value pairs can be used instead. However, in that case an empty
+value must be provided for plugins for which no options are defined. Therefore,
+the last example above could also be defined as follows:
+
+```yaml
+plugins:
+  search: {}
+  your_other_plugin:
+    option1: value
+    option2: other value
+```
+
+This alternative syntax is required if you intend to override some options via
+[inheritance].
 
 #### Search
 
@@ -793,11 +924,11 @@ the dot (`.`) as a word separator you might do this:
 
 ```yaml
 plugins:
-    - search:
-        separator: '[\s\-\.]+'
+  - search:
+      separator: '[\s\-\.]+'
 ```
 
-  **default**: `'[\s\-]+'`
+**default**: `'[\s\-]+'`
 
 ##### **min_search_length**
 
@@ -809,11 +940,11 @@ to set a shorter limit.
 
 ```yaml
 plugins:
-    - search:
-        min_search_length: 2
+  - search:
+      min_search_length: 2
 ```
 
-  **default**: 3
+**default**: 3
 
 ##### **lang**
 
@@ -886,8 +1017,8 @@ in scale, and the index takes up an enormous amount of disk space.
 
 ```yaml
 plugins:
-    - search:
-        indexing: 'full'
+  - search:
+      indexing: 'full'
 ```
 
 ###### Options
@@ -995,14 +1126,14 @@ For example, suppose the common (parent) configuration is defined in `base.yml`:
 
 ```yaml
 theme:
-    name: mkdocs
-    locale: en
-    highlightjs: true
+  name: mkdocs
+  locale: en
+  highlightjs: true
 
 markdown_extensions:
-    toc:
-        permalink: true
-    admonition: {}
+  toc:
+    permalink: true
+  admonition: {}
 ```
 
 Then, for the "foo" site, the primary configuration file would be defined at
@@ -1024,14 +1155,14 @@ site_name: Foo Project
 site_url: https://example.com/foo
 
 theme:
-    name: mkdocs
-    locale: en
-    highlightjs: true
+  name: mkdocs
+  locale: en
+  highlightjs: true
 
 markdown_extensions:
-    toc:
-        permalink: true
-    admonition: {}
+  toc:
+    permalink: true
+  admonition: {}
 ```
 
 Deep merging allows you to add and/or override various values in your primary
@@ -1045,10 +1176,10 @@ site_name: Bar Project
 site_url: https://example.com/bar
 
 markdown_extensions:
-    def_list: {}
-    toc:
-        permalink: 
-        separator: "_"
+  def_list: {}
+  toc:
+    permalink: 
+    separator: "_"
 ```
 
 In that case, the above configuration would be deep merged with `base.yml` and
@@ -1059,16 +1190,16 @@ site_name: Bar Project
 site_url: https://example.com/bar
 
 theme:
-    name: mkdocs
-    locale: en
-    highlightjs: true
+  name: mkdocs
+  locale: en
+  highlightjs: true
 
 markdown_extensions:
-    def_list: {}
-    toc:
-        permalink: 
-        separator: "_"
-    admonition: {}
+  def_list: {}
+  toc:
+    permalink: 
+    separator: "_"
+  admonition: {}
 ```
 
 Notice that the `admonition` extension was retained from the parent
@@ -1098,6 +1229,8 @@ echo '{INHERIT: mkdocs.yml, site_name: "Renamed site"}' | mkdocs build -f -
 ```
 
 [Theme Developer Guide]: ../dev-guide/themes.md
+[custom themes]: ../dev-guide/themes.md
+[available variables]: ../dev-guide/themes.md#template-variables
 [pymdk-extensions]: https://python-markdown.github.io/extensions/
 [pymkd]: https://python-markdown.github.io/
 [smarty]: https://python-markdown.github.io/extensions/smarty/
@@ -1105,7 +1238,8 @@ echo '{INHERIT: mkdocs.yml, site_name: "Renamed site"}' | mkdocs build -f -
 [Python-Markdown wiki]: https://github.com/Python-Markdown/markdown/wiki/Third-Party-Extensions
 [catalog]: https://github.com/mkdocs/catalog
 [configuring pages and navigation]: writing-your-docs.md#configure-pages-and-navigation
-[theme_dir]: customizing-your-theme.md#using-the-theme_dir
+[Meta-Data]: writing-your-docs.md#meta-data
+[theme_dir]: customizing-your-theme.md#using-the-theme-custom_dir
 [choosing your theme]: choosing-your-theme.md
 [Localizing your theme]: localizing-your-theme.md
 [extra_css]: #extra_css

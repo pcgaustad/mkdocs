@@ -70,7 +70,7 @@ class SearchConfigTests(unittest.TestCase):
 
     def test_lang_missing_and_with_territory(self):
         option = search.LangOption()
-        value = option.validate(['zh_CN', 'pt_BR', 'fr'])
+        value = option.validate(['cs_CZ', 'pt_BR', 'fr'])
         self.assertEqual(['fr', 'en', 'pt'], value)
 
 
@@ -314,9 +314,7 @@ class SearchIndexTests(unittest.TestCase):
         self.assertEqual(parser.data, [])
 
     def test_find_toc_by_id(self):
-        """
-        Test finding the relevant TOC item by the tag ID.
-        """
+        """Test finding the relevant TOC item by the tag ID."""
         index = search_index.SearchIndex()
 
         md = dedent(
@@ -354,22 +352,12 @@ class SearchIndexTests(unittest.TestCase):
         pages = [
             Page(
                 'Home',
-                File(
-                    'index.md',
-                    base_cfg['docs_dir'],
-                    base_cfg['site_dir'],
-                    base_cfg['use_directory_urls'],
-                ),
+                File('index.md', base_cfg.docs_dir, base_cfg.site_dir, base_cfg.use_directory_urls),
                 base_cfg,
             ),
             Page(
                 'About',
-                File(
-                    'about.md',
-                    base_cfg['docs_dir'],
-                    base_cfg['site_dir'],
-                    base_cfg['use_directory_urls'],
-                ),
+                File('about.md', base_cfg.docs_dir, base_cfg.site_dir, base_cfg.use_directory_urls),
                 base_cfg,
             ),
         ]

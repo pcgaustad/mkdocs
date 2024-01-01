@@ -13,12 +13,12 @@ config file.
 
 ```yaml
 theme:
-    name: readthedocs
+  name: readthedocs
 ```
 
 ## mkdocs
 
-The default theme, which was built as a custom [Bootstrap] theme, supports most
+The default theme, which was built as a custom [Bootstrap] theme, supports almost
 every feature of MkDocs.
 
 ![mkdocs](../img/mkdocs.png)
@@ -38,11 +38,11 @@ supports the following options:
 
     ```yaml
     theme:
-        name: mkdocs
-        highlightjs: true
-        hljs_languages:
-            - yaml
-            - rust
+      name: mkdocs
+      highlightjs: true
+      hljs_languages:
+        - yaml
+        - rust
     ```
 
 *   __`analytics`__: Defines configuration options for an analytics service.
@@ -55,9 +55,9 @@ supports the following options:
 
         ```yaml
         theme:
-            name: mkdocs
-            analytics:
-                gtag: G-ABC123
+          name: mkdocs
+          analytics:
+            gtag: G-ABC123
         ```
 
         When set to the default (`null`) Google Analytics is disabled for the
@@ -67,19 +67,19 @@ supports the following options:
 
     ```yaml
     theme:
-        name: mkdocs
-        shortcuts:
-            help: 191    # ?
-            next: 78     # n
-            previous: 80 # p
-            search: 83   # s
+      name: mkdocs
+      shortcuts:
+        help: 191    # ?
+        next: 78     # n
+        previous: 80 # p
+        search: 83   # s
     ```
 
-    All values must be numeric key codes. It is best to use keys which are
+    All values must be numeric key codes. It is best to use keys that are
     available on all keyboards. You may use <https://keycode.info/> to determine
     the key code for a given key.
 
-    *   __`help`__: Display a help modal which lists the keyboard shortcuts.
+    *   __`help`__: Display a help modal that lists the keyboard shortcuts.
         Default: `191` (&quest;)
 
     *   __`next`__: Navigate to the "next" page. Default: `78` (n)
@@ -97,8 +97,8 @@ supports the following options:
 
     ```yaml
     theme:
-        name: mkdocs
-        nav_style: dark
+      name: mkdocs
+      nav_style: dark
     ```
 
 *   __`locale`__{ #mkdocs-locale }: The locale (language/location) used to
@@ -115,7 +115,7 @@ supports the following options:
 ## readthedocs
 
 A clone of the default theme used by the [Read the Docs] service, which offers
-the same restricted feature-set as its parent theme. Like its parent theme, only
+the same restricted feature set as its parent theme. Like its parent theme, only
 two levels of navigation are supported.
 
 ![ReadTheDocs](../img/readthedocs.png)
@@ -131,11 +131,11 @@ theme supports the following options:
 
     ```yaml
     theme:
-        name: readthedocs
-        highlightjs: true
-        hljs_languages:
-            - yaml
-            - rust
+      name: readthedocs
+      highlightjs: true
+      hljs_languages:
+        - yaml
+        - rust
     ```
 
 *   __`analytics`__: Defines configuration options for an analytics service.
@@ -147,9 +147,9 @@ theme supports the following options:
 
         ```yaml
         theme:
-            name: readthedocs
-            analytics:
-                gtag: G-ABC123
+          name: readthedocs
+          analytics:
+            gtag: G-ABC123
         ```
 
         When set to the default (`null`) Google Analytics is disabled for the
@@ -195,6 +195,8 @@ theme supports the following options:
 ## Third Party Themes
 
 A list of third party themes can be found at the [community wiki] page and [the ranked catalog][catalog]. If you have created your own, please add them there.
+
+WARNING: Installing an MkDocs theme means installing a Python package and executing any code that the author has put in there. So, exercise the usual caution; there's no attempt at sandboxing.
 
 [third party themes]: #third-party-themes
 [theme]: configuration.md#theme
