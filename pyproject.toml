@@ -51,7 +51,6 @@ dependencies = [
 [project.optional-dependencies]
 i18n = [
     "babel >=2.9.0",
-    "setuptools; python_version >= '3.12'" # Workaround: babel doesn't declare its dependency
 ]
 min-versions = [
     "click ==7.0",
@@ -99,7 +98,7 @@ exclude = ["/mkdocs/tests", "*.po", "*.pot", "babel.cfg"]
 [tool.hatch.build.hooks.custom]
 dependencies = [
     "babel",
-    "setuptools; python_version >= '3.12'" # Workaround: babel doesn't declare its dependency
+    "setuptools; python_version >= '3.12'",
 ]
 
 [tool.hatch.env]
@@ -166,6 +165,7 @@ dependencies = [
 check = "mypy mkdocs"
 
 [tool.hatch.envs.style]
+type = "pip-compile"
 detached = true
 dependencies = [
     "black",
@@ -179,10 +179,10 @@ check = [
     "lint",
 ]
 lint = [
-    "ruff check mkdocs docs"
+    "ruff check mkdocs docs {args}"
 ]
 fix = [
-    "ruff check --fix mkdocs docs",
+    "lint --fix",
     "format",
 ]
 format = [
@@ -193,13 +193,12 @@ format = [
 [tool.hatch.envs.lint]
 detached = true
 dependencies = [
-    "codespell",
+    "codespell==2.2.6",
 ]
 [tool.hatch.envs.lint.scripts]
-spelling = 'codespell mkdocs docs *.* -S LC_MESSAGES -S "*.min.js" -S "lunr*.js" -S fontawesome-webfont.svg -S tinyseg.js'
+spelling = 'codespell mkdocs docs *.* -S LC_MESSAGES -S "*.min.js" -S "lunr*.js" -S fontawesome-webfont.svg -S tinyseg.js -S "*.map"'
 markdown = "npm exec --yes -- markdownlint-cli README.md CONTRIBUTING.md docs/ --ignore docs/CNAME"
 js = "npm exec --yes -- jshint mkdocs/"
-css = "npm exec --yes -- csslint --quiet mkdocs/"
 check = ["markdown", "js", "css", "spelling"]
 
 [tool.hatch.env.collectors.mkdocs.docs]

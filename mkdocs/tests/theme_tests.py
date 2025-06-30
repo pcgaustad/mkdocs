@@ -25,12 +25,15 @@ class ThemeTests(unittest.TestCase):
             dict(theme),
             {
                 'name': 'mkdocs',
+                'color_mode': 'light',
+                'user_color_mode_toggle': False,
                 'locale': parse_locale('en'),
                 'include_search_page': False,
                 'search_index_only': False,
                 'analytics': {'gtag': None},
                 'highlightjs': True,
                 'hljs_style': 'github',
+                'hljs_style_dark': 'github-dark',
                 'hljs_languages': [],
                 'navigation_depth': 2,
                 'nav_style': 'primary',
@@ -101,3 +104,22 @@ class ThemeTests(unittest.TestCase):
                 ],
             )
             self.assertEqual(theme.static_templates, {'sitemap.xml', 'child.html', 'parent.html'})
+
+    def test_empty_config_file(self):
+        # Test for themes with *empty* mkdocs_theme.yml.
+        # See https://github.com/mkdocs/mkdocs/issues/3699
+        m = mock.Mock(
+            # yaml.load returns "None" for an empty file
+            side_effect=[None]
+        )
+        with mock.patch('yaml.load', m) as m:
+            theme = Theme(name='mkdocs')
+            # Should only have the default name and locale __vars set in
+            # Theme.__init__()
+            self.assertEqual(
+                dict(theme),
+                {
+                    'name': 'mkdocs',
+                    'locale': parse_locale('en'),
+                },
+            )

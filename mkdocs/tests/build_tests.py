@@ -274,14 +274,14 @@ class BuildTests(PathAssertionMixin, unittest.TestCase):
     # Test build._build_extra_template
 
     @tempdir()
-    @mock.patch('mkdocs.commands.build.open', mock.mock_open(read_data='template content'))
+    @mock.patch('mkdocs.structure.files.open', mock.mock_open(read_data='template content'))
     def test_build_extra_template(self, site_dir):
         cfg = load_config(site_dir=site_dir)
         fs = [File('foo.html', cfg.docs_dir, cfg.site_dir, cfg.use_directory_urls)]
         files = Files(fs)
         build._build_extra_template('foo.html', files, cfg, mock.Mock())
 
-    @mock.patch('mkdocs.commands.build.open', mock.mock_open(read_data='template content'))
+    @mock.patch('mkdocs.structure.files.open', mock.mock_open(read_data='template content'))
     def test_skip_missing_extra_template(self):
         cfg = load_config()
         fs = [File('foo.html', cfg.docs_dir, cfg.site_dir, cfg.use_directory_urls)]
@@ -293,7 +293,7 @@ class BuildTests(PathAssertionMixin, unittest.TestCase):
             "WARNING:mkdocs.commands.build:Template skipped: 'missing.html' not found in docs_dir.",
         )
 
-    @mock.patch('mkdocs.commands.build.open', mock.Mock(side_effect=OSError('Error message.')))
+    @mock.patch('mkdocs.structure.files.open', mock.Mock(side_effect=OSError('Error message.')))
     def test_skip_ioerror_extra_template(self):
         cfg = load_config()
         fs = [File('foo.html', cfg.docs_dir, cfg.site_dir, cfg.use_directory_urls)]
@@ -305,7 +305,7 @@ class BuildTests(PathAssertionMixin, unittest.TestCase):
             "WARNING:mkdocs.commands.build:Error reading template 'foo.html': Error message.",
         )
 
-    @mock.patch('mkdocs.commands.build.open', mock.mock_open(read_data=''))
+    @mock.patch('mkdocs.structure.files.open', mock.mock_open(read_data=''))
     def test_skip_extra_template_empty_output(self):
         cfg = load_config()
         fs = [File('foo.html', cfg.docs_dir, cfg.site_dir, cfg.use_directory_urls)]
@@ -350,7 +350,7 @@ class BuildTests(PathAssertionMixin, unittest.TestCase):
         self.assertEqual(page.content, None)
 
     @tempdir(files={'index.md': 'new page content'})
-    @mock.patch('mkdocs.structure.pages.open', side_effect=OSError('Error message.'))
+    @mock.patch('mkdocs.structure.files.open', side_effect=OSError('Error message.'))
     def test_populate_page_read_error(self, docs_dir, mock_open):
         cfg = load_config(docs_dir=docs_dir)
         file = File('missing.md', cfg.docs_dir, cfg.site_dir, cfg.use_directory_urls)
@@ -550,7 +550,7 @@ class BuildTests(PathAssertionMixin, unittest.TestCase):
         self.assertPathIsDir(site_dir, 'js')
         self.assertPathIsDir(site_dir, 'css')
         self.assertPathIsDir(site_dir, 'img')
-        self.assertPathIsDir(site_dir, 'fonts')
+        self.assertPathIsDir(site_dir, 'webfonts')
         self.assertPathNotExists(site_dir, '__init__.py')
         self.assertPathNotExists(site_dir, '__init__.pyc')
         self.assertPathNotExists(site_dir, 'base.html')
@@ -570,6 +570,66 @@ class BuildTests(PathAssertionMixin, unittest.TestCase):
         if msgs and msgs[-1].startswith('INFO:Documentation built'):
             del msgs[-1]
         self.assertEqual('\n'.join(msgs), textwrap.dedent(expected).strip('\n'))
+
+    @tempdir(
+        files={
+            'foo_unpublished.md': 'unpublished content to include anyway',
+            'other_unpublished.md': 'unpublished content',
+            'normal_file.md': 'should not be affected',
+            'test/other_unpublished.md': 'more unpublished content',
+            'test/normal_file.md': 'should not be affected',
+        }
+    )
+    @tempdir()
+    def test_draft_docs_with_comments_from_user_guide(self, site_dir, docs_dir):
+        cfg = load_config(
+            docs_dir=docs_dir,
+            site_dir=site_dir,
+            use_directory_urls=False,
+            draft_docs='''
+                # A "drafts" directory anywhere.
+                drafts/
+
+                # A Markdown file ending in _unpublished.md anywhere.
+                *_unpublished.md
+
+                # But keep this particular file.
+                !/foo_unpublished.md
+            ''',
+        )
+
+        with self.subTest(serve_url=None):
+            build.build(cfg)
+            self.assertPathIsFile(site_dir, 'foo_unpublished.html')
+            self.assertPathIsFile(site_dir, 'normal_file.html')
+            self.assertPathIsFile(site_dir, 'test', 'normal_file.html')
+            self.assertPathNotExists(site_dir, 'other_unpublished.html')
+            self.assertPathNotExists(site_dir, 'test', 'other_unpublished.html')
+
+        serve_url = 'http://localhost:123/documentation/'
+        with self.subTest(serve_url=serve_url):
+            expected_logs = '''
+                INFO:The following pages are being built only for the preview but will be excluded from `mkdocs build` per `draft_docs` config:
+                  - http://localhost:123/documentation/other_unpublished.html
+                  - http://localhost:123/documentation/test/other_unpublished.html
+            '''
+            with self._assert_build_logs(expected_logs):
+                build.build(cfg, serve_url=serve_url)
+
+            top_other_path = Path(site_dir, 'other_unpublished.html')
+            self.assertTrue(top_other_path.is_file())
+            self.assertIn('DRAFT', top_other_path.read_text())
+
+            sub_other_path = Path(site_dir, 'test', 'other_unpublished.html')
+            self.assertPathIsFile(sub_other_path)
+            self.assertIn('DRAFT', sub_other_path.read_text())
+
+            self.assertPathIsFile(site_dir, 'foo_unpublished.html')
+            self.assertPathIsFile(site_dir, 'normal_file.html')
+
+            good_path = Path(site_dir, 'test', 'normal_file.html')
+            self.assertPathIsFile(good_path)
+            self.assertNotIn('DRAFT', good_path.read_text())
 
     @tempdir(
         files={
@@ -763,7 +823,7 @@ class BuildTests(PathAssertionMixin, unittest.TestCase):
             # Plugin 2 reads that file and uses it to configure the nav.
             f = files.get_file_from_path('SUMMARY.md')
             assert f is not None
-            config.nav = Path(f.abs_src_path).read_text().splitlines()
+            config.nav = f.content_string.splitlines()
 
         for serve_url in None, 'http://localhost:123/':
             for exclude in 'full', 'drafts', 'nav', None:

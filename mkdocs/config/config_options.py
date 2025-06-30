@@ -488,16 +488,6 @@ class IpAddress(OptionallyRequired[_IpAddressValue]):
 
         return _IpAddressValue(host, port)
 
-    def post_validation(self, config: Config, key_name: str):
-        host = config[key_name].host
-        if key_name == 'dev_addr' and host in ['0.0.0.0', '::']:
-            self.warnings.append(
-                f"The use of the IP address '{host}' suggests a production environment "
-                "or the use of a proxy to connect to the MkDocs server. However, "
-                "the MkDocs' server is intended for local development purposes only. "
-                "Please use a third party production-ready server instead."
-            )
-
 
 class URL(OptionallyRequired[str]):
     """
@@ -1208,7 +1198,14 @@ class Hooks(BaseConfigOption[List[types.ModuleType]]):
         sys.modules[name] = module
         if spec.loader is None:
             raise ValidationError(f"Cannot import path '{path}' as a Python module")
-        spec.loader.exec_module(module)
+
+        old_sys_path = sys.path.copy()
+        sys.path.insert(0, os.path.dirname(path))
+        try:
+            spec.loader.exec_module(module)
+        finally:
+            sys.path[:] = old_sys_path
+
         return module
 
     def post_validation(self, config: Config, key_name: str):

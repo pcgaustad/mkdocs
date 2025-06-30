@@ -6,9 +6,11 @@ import textwrap
 import unittest
 from unittest import mock
 
+import markdown
+
 from mkdocs.config.defaults import MkDocsConfig
 from mkdocs.structure.files import File, Files
-from mkdocs.structure.pages import Page, _RelativePathTreeprocessor
+from mkdocs.structure.pages import Page, _ExtractTitleTreeprocessor, _RelativePathTreeprocessor
 from mkdocs.tests.base import dedent, tempdir
 
 DOCS_DIR = os.path.join(
@@ -315,8 +317,15 @@ class PageTests(unittest.TestCase):
         self.assertEqual(pg.parent, None)
         self.assertEqual(pg.previous_page, None)
         self.assertEqual(pg.title, 'Welcome to MkDocs')
-        pg.render(cfg, fl)
+        pg.render(cfg, Files([fl]))
         self.assertEqual(pg.title, 'Welcome to MkDocs')
+
+    def _test_extract_title(self, content, expected, extensions={}):
+        md = markdown.Markdown(extensions=list(extensions.keys()), extension_configs=extensions)
+        extract_title_ext = _ExtractTitleTreeprocessor()
+        extract_title_ext._register(md)
+        md.convert(content)
+        self.assertEqual(extract_title_ext.title, expected)
 
     _SETEXT_CONTENT = dedent(
         '''
@@ -327,46 +336,63 @@ class PageTests(unittest.TestCase):
         '''
     )
 
-    @tempdir(files={'testing_setext_title.md': _SETEXT_CONTENT})
-    def test_page_title_from_setext_markdown(self, docs_dir):
-        cfg = load_config()
-        fl = File('testing_setext_title.md', docs_dir, docs_dir, use_directory_urls=True)
-        pg = Page(None, fl, cfg)
-        self.assertIsNone(pg.title)
-        pg.read_source(cfg)
-        self.assertEqual(pg.title, 'Testing setext title')
-        pg.render(cfg, fl)
-        self.assertEqual(pg.title, 'Welcome to MkDocs Setext')
+    def test_page_title_from_setext_markdown(self):
+        self._test_extract_title(
+            self._SETEXT_CONTENT,
+            expected='Welcome to MkDocs Setext',
+        )
 
-    @tempdir(files={'testing_setext_title.md': _SETEXT_CONTENT})
-    def test_page_title_from_markdown_stripped_anchorlinks(self, docs_dir):
-        cfg = MkDocsConfig()
-        cfg.site_name = 'example'
-        cfg.markdown_extensions = {'toc': {'permalink': '&'}}
-        self.assertEqual(cfg.validate(), ([], []))
-        fl = File('testing_setext_title.md', docs_dir, docs_dir, use_directory_urls=True)
-        pg = Page(None, fl, cfg)
-        pg.read_source(cfg)
-        pg.render(cfg, fl)
-        self.assertEqual(pg.title, 'Welcome to MkDocs Setext')
+    def test_page_title_from_markdown_with_email(self):
+        self._test_extract_title(
+            '''# <foo@example.org>''',
+            expected='&#102;&#111;&#111;&#64;&#101;&#120;&#97;&#109;&#112;&#108;&#101;&#46;&#111;&#114;&#103;',
+        )
 
-    _FORMATTING_CONTENT = dedent(
-        '''
-        # \\*Hello --- *beautiful* `world`
+    def test_page_title_from_markdown_stripped_anchorlinks(self):
+        self._test_extract_title(
+            self._SETEXT_CONTENT,
+            extensions={'toc': {'permalink': '&'}},
+            expected='Welcome to MkDocs Setext',
+        )
 
-        Hi.
-        '''
-    )
+    def test_page_title_from_markdown_strip_footnoteref(self):
+        foootnotes = '''\n\n[^1]: foo\n[^2]: bar'''
+        self._test_extract_title(
+            '''# Header[^1] foo[^2] bar''' + foootnotes,
+            extensions={'footnotes': {}},
+            expected='Header foo bar',
+        )
+        self._test_extract_title(
+            '''# *Header[^1]* *foo*[^2]''' + foootnotes,
+            extensions={'footnotes': {}},
+            expected='Header foo',
+        )
+        self._test_extract_title(
+            '''# *Header[^1][^2]s''' + foootnotes,
+            extensions={'footnotes': {}},
+            expected='*Headers',
+        )
 
-    @tempdir(files={'testing_formatting.md': _FORMATTING_CONTENT})
-    def test_page_title_from_markdown_strip_formatting(self, docs_dir):
-        cfg = load_config()
-        cfg.markdown_extensions.append('smarty')
-        fl = File('testing_formatting.md', docs_dir, docs_dir, use_directory_urls=True)
-        pg = Page(None, fl, cfg)
-        pg.read_source(cfg)
-        pg.render(cfg, fl)
-        self.assertEqual(pg.title, '*Hello &mdash; beautiful world')
+    def test_page_title_from_markdown_strip_formatting(self):
+        self._test_extract_title(
+            '''# \\*Hello --- *beautiful* `wor<dl>`''',
+            extensions={'smarty': {}},
+            expected='*Hello &mdash; beautiful wor&lt;dl&gt;',
+        )
+
+    def test_page_title_from_markdown_html_entity(self):
+        self._test_extract_title('''# Foo &lt; &amp; bar''', expected='Foo &lt; &amp; bar')
+        self._test_extract_title('''# Foo > & bar''', expected='Foo &gt; &amp; bar')
+
+    def test_page_title_from_markdown_strip_raw_html(self):
+        self._test_extract_title('''# Hello <b>world</b>''', expected='Hello world')
+
+    def test_page_title_from_markdown_strip_comments(self):
+        self._test_extract_title('''# foo <!-- comment with <em> --> bar''', expected='foo bar')
+
+    def test_page_title_from_markdown_strip_image(self):
+        self._test_extract_title('''# Hi ![😄](hah.png)''', expected='Hi 😄')
+        self._test_extract_title('''# Hi *-![😄](hah.png)-*''', expected='Hi -😄-')
 
     _ATTRLIST_CONTENT = dedent(
         '''
@@ -376,24 +402,18 @@ class PageTests(unittest.TestCase):
         '''
     )
 
-    @tempdir(files={'testing_attr_list.md': _ATTRLIST_CONTENT})
-    def test_page_title_from_markdown_stripped_attr_list(self, docs_dir):
-        cfg = load_config()
-        cfg.markdown_extensions.append('attr_list')
-        fl = File('testing_attr_list.md', docs_dir, docs_dir, use_directory_urls=True)
-        pg = Page(None, fl, cfg)
-        pg.read_source(cfg)
-        pg.render(cfg, fl)
-        self.assertEqual(pg.title, 'Welcome to MkDocs Attr')
+    def test_page_title_from_markdown_stripped_attr_list(self):
+        self._test_extract_title(
+            self._ATTRLIST_CONTENT,
+            extensions={'attr_list': {}},
+            expected='Welcome to MkDocs Attr',
+        )
 
-    @tempdir(files={'testing_attr_list.md': _ATTRLIST_CONTENT})
-    def test_page_title_from_markdown_preserved_attr_list(self, docs_dir):
-        cfg = load_config()
-        fl = File('testing_attr_list.md', docs_dir, docs_dir, use_directory_urls=True)
-        pg = Page(None, fl, cfg)
-        pg.read_source(cfg)
-        pg.render(cfg, fl)
-        self.assertEqual(pg.title, 'Welcome to MkDocs Attr { #welcome }')
+    def test_page_title_from_markdown_preserved_attr_list(self):
+        self._test_extract_title(
+            self._ATTRLIST_CONTENT,
+            expected='Welcome to MkDocs Attr { #welcome }',
+        )
 
     def test_page_title_from_meta(self):
         cfg = load_config(docs_dir=DOCS_DIR)
@@ -418,7 +438,7 @@ class PageTests(unittest.TestCase):
         self.assertEqual(pg.previous_page, None)
         self.assertEqual(pg.title, 'A Page Title')
         self.assertEqual(pg.toc, [])
-        pg.render(cfg, fl)
+        pg.render(cfg, Files([fl]))
         self.assertEqual(pg.title, 'A Page Title')
 
     def test_page_title_from_filename(self):
@@ -443,7 +463,7 @@ class PageTests(unittest.TestCase):
         self.assertEqual(pg.parent, None)
         self.assertEqual(pg.previous_page, None)
         self.assertEqual(pg.title, 'Page title')
-        pg.render(cfg, fl)
+        pg.render(cfg, Files([fl]))
         self.assertEqual(pg.title, 'Page title')
 
     def test_page_title_from_capitalized_filename(self):
@@ -677,6 +697,26 @@ class PageTests(unittest.TestCase):
                 self.assertEqual(pg.edit_url, case['edit_url'])
                 self.assertEqual(cm.output, [case['warning']])
 
+    def test_page_edit_url_custom_from_file(self):
+        for case in [
+            dict(
+                edit_uri='hooks.py',
+                expected_edit_url='https://github.com/mkdocs/mkdocs/edit/master/docs/hooks.py',
+            ),
+            dict(
+                edit_uri='../scripts/hooks.py',
+                expected_edit_url='https://github.com/mkdocs/mkdocs/edit/master/scripts/hooks.py',
+            ),
+            dict(edit_uri=None, expected_edit_url=None),
+        ]:
+            with self.subTest(case['edit_uri']):
+                cfg = load_config(repo_url='https://github.com/mkdocs/mkdocs')
+                fl = File('testing.md', cfg.docs_dir, cfg.site_dir, cfg.use_directory_urls)
+                fl.edit_uri = case['edit_uri']
+                pg = Page('Foo', fl, cfg)
+                self.assertEqual(pg.url, 'testing/')
+                self.assertEqual(pg.edit_url, case['expected_edit_url'])
+
     def test_page_render(self):
         cfg = load_config()
         fl = File('testing.md', cfg.docs_dir, cfg.site_dir, cfg.use_directory_urls)
@@ -684,7 +724,7 @@ class PageTests(unittest.TestCase):
         pg.read_source(cfg)
         self.assertEqual(pg.content, None)
         self.assertEqual(pg.toc, [])
-        pg.render(cfg, [fl])
+        pg.render(cfg, Files([fl]))
         self.assertTrue(
             pg.content.startswith('<h1 id="welcome-to-mkdocs">Welcome to MkDocs</h1>\n')
         )
@@ -737,7 +777,7 @@ class RelativePathExtensionTests(unittest.TestCase):
         fs = [File(f, cfg.docs_dir, cfg.site_dir, cfg.use_directory_urls) for f in files]
         pg = Page('Foo', fs[0], cfg)
 
-        with mock.patch('mkdocs.structure.pages.open', mock.mock_open(read_data=content)):
+        with mock.patch('mkdocs.structure.files.open', mock.mock_open(read_data=content)):
             pg.read_source(cfg)
         if logs:
             with self.assertLogs('mkdocs.structure.pages') as cm:
